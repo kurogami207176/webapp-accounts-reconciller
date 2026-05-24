@@ -1,0 +1,52 @@
+name: Deploy to Production
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Build & deploy to production
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.ref_name }}
+        run: |
+          docker build -f api/Dockerfile \
+            -t $ECR_REGISTRY/webapp-api:$IMAGE_TAG \
+            -t $ECR_REGISTRY/webapp-api:stable \
+            api/
+          docker push $ECR_REGISTRY/webapp-api:$IMAGE_TAG
+          docker push $ECR_REGISTRY/webapp-api:stable
+
+      - name: Deploy CloudFormation stack
+        run: |
+          aws cloudformation deploy \
+            --template-file infra/cloudformation/app-runner.yml \
+            --stack-name webapp-api-production \
+            --parameter-overrides \
+              "file://infra/cloudformation/parameters/production.json" \
+              "ImageTag=${{ github.ref_name }}" \
+            --capabilities CAPABILITY_IAM \
+            --region ${{ vars.AWS_REGION }}

@@ -1,0 +1,243 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Cognito User Pool for webapp-accounts-reconciller.
+  Handles sign-up/login for both the web app (authorization code + PKCE)
+  and the mobile app (authorization code + PKCE — same flow, no client secret).
+  Exports User Pool ID and App Client IDs for use by the ECS stack.
+
+Parameters:
+  AppName:
+    Type: String
+    Default: webapp-accounts-reconciller
+
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [staging, production]
+
+  # The URL Cognito redirects back to after login/logout.
+  # For web: your app domain. For mobile: a custom URI scheme (e.g. myapp://callback).
+  WebCallbackUrl:
+    Type: String
+    Description: >
+      HTTPS URL Cognito redirects to after web login.
+      e.g. https://webapp-accounts-reconciller.apps.alainjunia.com/auth/callback
+
+  WebLogoutUrl:
+    Type: String
+    Description: >
+      HTTPS URL Cognito redirects to after web logout.
+      e.g. https://webapp-accounts-reconciller.apps.alainjunia.com/auth/logout
+
+  MobileCallbackUrl:
+    Type: String
+    Description: >
+      URI scheme Cognito redirects to after mobile login.
+      e.g. com.yourapp://callback
+
+  MobileLogoutUrl:
+    Type: String
+    Description: >
+      URI scheme Cognito redirects to after mobile logout.
+      e.g. com.yourapp://logout
+
+  # Cognito Hosted UI domain prefix — must be globally unique across AWS.
+  # Results in: https://<HostedUiDomain>.auth.<region>.amazoncognito.com
+  HostedUiDomain:
+    Type: String
+    Description: >
+      Globally unique prefix for the Cognito Hosted UI domain.
+      e.g. webapp-accounts-reconciller-production (must be lowercase, hyphens only)
+
+  # Token lifetimes
+  AccessTokenValidityHours:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 24
+
+  RefreshTokenValidityDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 3650
+
+Resources:
+  # ---------------------------------------------------------------
+  # User Pool
+  # ---------------------------------------------------------------
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain   # Never accidentally delete user accounts
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub "${AppName}-${Environment}"
+
+      # Allow users to sign in with their email address
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+
+      # Password policy
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          TemporaryPasswordValidityDays: 7
+
+      # MFA — OFF by default, OPTIONAL lets users opt in via TOTP
+      MfaConfiguration: "OPTIONAL"
+      EnabledMfas:
+        - SOFTWARE_TOKEN_MFA
+
+      # Account recovery via email
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+
+      # Standard attributes — email is required and auto-verified
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+
+      # Email messages (Cognito's default sender — replace with SES in prod)
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+
+      # User pool add-ons
+      UserPoolAddOns:
+        AdvancedSecurityMode: AUDIT   # upgrade to ENFORCED for stricter protection
+
+      Tags:
+        - Key: AppName
+          Value: !Ref AppName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ---------------------------------------------------------------
+  # Hosted UI domain
+  # ---------------------------------------------------------------
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref HostedUiDomain
+      UserPoolId: !Ref UserPool
+
+  # ---------------------------------------------------------------
+  # Web App Client
+  # Uses authorization code + PKCE (no client secret — safe for SPAs).
+  # ---------------------------------------------------------------
+  WebAppClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "${AppName}-${Environment}-web"
+      UserPoolId: !Ref UserPool
+
+      # No client secret — web client uses PKCE
+      GenerateSecret: false
+
+      # Auth flows — only allow PKCE/code flow; disable legacy flows
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+
+      CallbackURLs:
+        - !Ref WebCallbackUrl
+      LogoutURLs:
+        - !Ref WebLogoutUrl
+
+      # Token validity
+      AccessTokenValidity: !Ref AccessTokenValidityHours
+      RefreshTokenValidity: !Ref RefreshTokenValidityDays
+      TokenValidityUnits:
+        AccessToken: hours
+        RefreshToken: days
+        IdToken: hours
+
+      # Prevent user enumeration
+      PreventUserExistenceErrors: ENABLED
+
+      # Supported identity providers — add Google/Apple here later
+      SupportedIdentityProviders:
+        - COGNITO
+
+  # ---------------------------------------------------------------
+  # Mobile App Client
+  # Same PKCE flow — no client secret.
+  # Separate client so mobile tokens can have different lifetimes
+  # and you can revoke mobile access independently.
+  # ---------------------------------------------------------------
+  MobileAppClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "${AppName}-${Environment}-mobile"
+      UserPoolId: !Ref UserPool
+
+      GenerateSecret: false
+
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+
+      CallbackURLs:
+        - !Ref MobileCallbackUrl
+      LogoutURLs:
+        - !Ref MobileLogoutUrl
+
+      # Mobile tokens last longer — users shouldn't be forced to re-login often
+      AccessTokenValidity: !Ref AccessTokenValidityHours
+      RefreshTokenValidity: !Ref RefreshTokenValidityDays
+      TokenValidityUnits:
+        AccessToken: hours
+        RefreshToken: days
+        IdToken: hours
+
+      PreventUserExistenceErrors: ENABLED
+
+      SupportedIdentityProviders:
+        - COGNITO
+
+# ---------------------------------------------------------------
+# Outputs — consumed by the ECS stack
+# ---------------------------------------------------------------
+Outputs:
+  UserPoolId:
+    Value: !Ref UserPool
+    Export:
+      Name: !Sub "${AWS::StackName}-UserPoolId"
+
+  UserPoolArn:
+    Value: !GetAtt UserPool.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-UserPoolArn"
+
+  WebClientId:
+    Value: !Ref WebAppClient
+    Export:
+      Name: !Sub "${AWS::StackName}-WebClientId"
+
+  MobileClientId:
+    Value: !Ref MobileAppClient
+    Export:
+      Name: !Sub "${AWS::StackName}-MobileClientId"
+
+  HostedUiBaseUrl:
+    Description: Base URL for the Cognito Hosted UI
+    Value: !Sub "https://${HostedUiDomain}.auth.${AWS::Region}.amazoncognito.com"
+    Export:
+      Name: !Sub "${AWS::StackName}-HostedUiBaseUrl"

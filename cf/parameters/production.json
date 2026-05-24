@@ -1,0 +1,8 @@
+[
+  { "ParameterKey": "AppName",        "ParameterValue": "webapp-accounts-reconciller" },
+  { "ParameterKey": "Environment",    "ParameterValue": "production" },
+  { "ParameterKey": "DesiredCount",   "ParameterValue": "1" },
+  { "ParameterKey": "TaskCpu",        "ParameterValue": "256" },
+  { "ParameterKey": "TaskMemory",     "ParameterValue": "512" },
+  { "ParameterKey": "LogRetentionDays", "ParameterValue": "30" }
+]

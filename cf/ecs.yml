@@ -1,0 +1,312 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  ECS Express Mode service for webapp-accounts-reconciller.
+  Automatically provisions the ALB, target group, security groups,
+  auto-scaling, and CloudWatch logs — no separate network stack required.
+  Depends on the ECR stack (cf/ecr.yml).
+  Optionally connects to Aurora via the database stack (cf in webapp-environment-setup).
+
+Parameters:
+  AppName:
+    Type: String
+    Default: webapp-accounts-reconciller
+
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [staging, production]
+
+  EcrStackName:
+    Type: String
+    Default: webapp-accounts-reconciller-ecr
+    Description: Name of the deployed ECR CloudFormation stack.
+
+  DatabaseStackName:
+    Type: String
+    Default: ""
+    Description: >
+      Name of the deployed database CloudFormation stack (webapp-environment-setup).
+      Leave empty to run without a database — DB_SECRET_ARN will not be set.
+
+  CognitoStackName:
+    Type: String
+    Default: ""
+    Description: >
+      Name of the deployed Cognito CloudFormation stack (cf/cognito.yml).
+      Leave empty to run without authentication — auth routes will return 503.
+
+  SecretKeyArn:
+    Type: String
+    Default: ""
+    Description: >
+      ARN of a Secrets Manager secret containing the Flask SECRET_KEY value.
+      Used to sign session cookies. Create once with:
+        aws secretsmanager create-secret --name /<app>/<env>/flask-secret-key \
+          --secret-string "$(openssl rand -hex 32)"
+
+  ImageTag:
+    Type: String
+    Default: latest
+    Description: Docker image tag to deploy.
+
+  ContainerPort:
+    Type: Number
+    Default: 3000
+
+  TaskCpu:
+    Type: String
+    Default: "256"
+    AllowedValues: ["256", "512", "1024", "2048", "4096"]
+
+  TaskMemory:
+    Type: String
+    Default: "512"
+    AllowedValues: ["512", "1024", "2048", "4096", "8192"]
+
+  MinTaskCount:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10
+
+  MaxTaskCount:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    MaxValue: 10
+
+Conditions:
+  HasDatabase: !Not [!Equals [!Ref DatabaseStackName, ""]]
+  HasCognito:  !Not [!Equals [!Ref CognitoStackName, ""]]
+  HasSecretKey: !Not [!Equals [!Ref SecretKeyArn, ""]]
+
+Resources:
+  # ---------------------------------------------------------------
+  # IAM — ECS task execution role (pull image, write logs)
+  # ---------------------------------------------------------------
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppName}-${Environment}-ecs-execution-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Tags:
+        - Key: AppName
+          Value: !Ref AppName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # IAM — Allow the execution role to fetch SECRET_KEY at container launch.
+  # The execution role (not the task role) handles secret injection at startup.
+  ExecutionRoleSecretKeyPolicy:
+    Type: AWS::IAM::Policy
+    Condition: HasSecretKey
+    Properties:
+      PolicyName: !Sub "${AppName}-${Environment}-exec-fetch-secret-key"
+      Roles:
+        - !Ref TaskExecutionRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: FetchSecretKey
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !Ref SecretKeyArn
+
+  # IAM — ECS task role (runtime permissions for your app)
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppName}-${Environment}-ecs-task-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Tags:
+        - Key: AppName
+          Value: !Ref AppName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # IAM — Inline policy granting the task role access to the DB secret.
+  # Scoped to the exact secret ARN exported by the database stack.
+  # Only created when DatabaseStackName is provided.
+  TaskRoleDbPolicy:
+    Type: AWS::IAM::Policy
+    Condition: HasDatabase
+    Properties:
+      PolicyName: !Sub "${AppName}-${Environment}-read-db-secret"
+      Roles:
+        - !Ref TaskRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ReadDbSecret
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+            Resource:
+              Fn::ImportValue: !Sub "${DatabaseStackName}-DbAppSecretArn"
+
+  # IAM — Allow task to read the Flask SECRET_KEY from Secrets Manager.
+  # Only created when SecretKeyArn is provided.
+  TaskRoleSecretKeyPolicy:
+    Type: AWS::IAM::Policy
+    Condition: HasSecretKey
+    Properties:
+      PolicyName: !Sub "${AppName}-${Environment}-read-secret-key"
+      Roles:
+        - !Ref TaskRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ReadSecretKey
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+            Resource: !Ref SecretKeyArn
+
+  # IAM — Infrastructure role (ECS Express manages ALB, SGs, auto-scaling on your behalf)
+  InfrastructureRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppName}-${Environment}-ecs-infrastructure-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSInfrastructureRoleforExpressGatewayServices
+      Tags:
+        - Key: AppName
+          Value: !Ref AppName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ---------------------------------------------------------------
+  # ECS Express Gateway Service
+  # Automatically provisions: ECS cluster, task definition, service,
+  # ALB, target group, security groups, auto-scaling, CloudWatch logs.
+  # ---------------------------------------------------------------
+  ExpressService:
+    Type: AWS::ECS::ExpressGatewayService
+    Properties:
+      ServiceName: !Sub "${AppName}-${Environment}"
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      InfrastructureRoleArn: !GetAtt InfrastructureRole.Arn
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      HealthCheckPath: /health
+      PrimaryContainer:
+        Image: !Sub
+          - "${Uri}:${Tag}"
+          - Uri:
+              Fn::ImportValue: !Sub "${EcrStackName}-RepositoryUri"
+            Tag: !Ref ImageTag
+        ContainerPort: !Ref ContainerPort
+        Environment:
+          - Name: PORT
+            Value: !Sub "${ContainerPort}"
+          - Name: ENVIRONMENT
+            Value: !Ref Environment
+          - Name: PYTHONDONTWRITEBYTECODE
+            Value: "1"
+          # DB_SECRET_ARN — absent means no DB pool (db.py handles gracefully)
+          - !If
+            - HasDatabase
+            - Name: DB_SECRET_ARN
+              Value:
+                Fn::ImportValue: !Sub "${DatabaseStackName}-DbAppSecretArn"
+            - !Ref AWS::NoValue
+          # Cognito config — plain env vars (not sensitive, safe to store here)
+          - !If
+            - HasCognito
+            - Name: COGNITO_REGION
+              Value: !Ref AWS::Region
+            - !Ref AWS::NoValue
+          - !If
+            - HasCognito
+            - Name: COGNITO_USER_POOL_ID
+              Value:
+                Fn::ImportValue: !Sub "${CognitoStackName}-UserPoolId"
+            - !Ref AWS::NoValue
+          - !If
+            - HasCognito
+            - Name: COGNITO_WEB_CLIENT_ID
+              Value:
+                Fn::ImportValue: !Sub "${CognitoStackName}-WebClientId"
+            - !Ref AWS::NoValue
+          - !If
+            - HasCognito
+            - Name: COGNITO_MOBILE_CLIENT_ID
+              Value:
+                Fn::ImportValue: !Sub "${CognitoStackName}-MobileClientId"
+            - !Ref AWS::NoValue
+          - !If
+            - HasCognito
+            - Name: COGNITO_HOSTED_UI_URL
+              Value:
+                Fn::ImportValue: !Sub "${CognitoStackName}-HostedUiBaseUrl"
+            - !Ref AWS::NoValue
+        # SECRET_KEY is fetched from Secrets Manager at task launch by ECS —
+        # never stored in plaintext in the task definition or CloudFormation.
+        Secrets:
+          - !If
+            - HasSecretKey
+            - Name: SECRET_KEY
+              ValueFrom: !Ref SecretKeyArn
+            - !Ref AWS::NoValue
+      ScalingTarget:
+        MinTaskCount: !Ref MinTaskCount
+        MaxTaskCount: !Ref MaxTaskCount
+      Tags:
+        - Key: AppName
+          Value: !Ref AppName
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  ServiceArn:
+    Value: !GetAtt ExpressService.ServiceArn
+    Export:
+      Name: !Sub "${AWS::StackName}-ServiceArn"
+
+  AlbArn:
+    Value: !GetAtt ExpressService.ECSManagedResourceArns.IngressPath.LoadBalancerArn
+    Export:
+      Name: !Sub "${AWS::StackName}-AlbArn"
+
+  AlbDnsName:
+    Value: !GetAtt ExpressService.Endpoint
+    Export:
+      Name: !Sub "${AWS::StackName}-AlbDnsName"
+
+  TargetGroupArn:
+    # First target group in the managed list
+    Value: !Select
+      - 0
+      - !GetAtt ExpressService.ECSManagedResourceArns.IngressPath.TargetGroupArns
+    Export:
+      Name: !Sub "${AWS::StackName}-TargetGroupArn"
+
+  ListenerArn:
+    Value: !GetAtt ExpressService.ECSManagedResourceArns.IngressPath.ListenerArn
+    Export:
+      Name: !Sub "${AWS::StackName}-ListenerArn"

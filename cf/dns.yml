@@ -1,0 +1,65 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Route53 CNAME record pointing <AppName>.<AppsSubdomain>.<domain> → the
+  ECS Express Mode endpoint.
+  Deploy this AFTER the ECS stack so the endpoint is available.
+  NOTE: ECS Express Mode uses its own managed domain (not a standard ALB),
+  so we use a CNAME rather than an alias record.
+
+Parameters:
+  AppName:
+    Type: String
+    Default: webapp-accounts-reconciller
+    Description: >
+      Used as the subdomain label — the record created will be
+      <AppName>.<AppsSubdomain>.<domain>.
+
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [staging, production]
+
+  AppsSubdomain:
+    Type: String
+    Default: apps
+    Description: Second-level label (result is <AppName>.<AppsSubdomain>.<domain>).
+
+  EcsStackName:
+    Type: String
+    Default: webapp-accounts-reconciller-ecs-production
+    Description: Name of the deployed ECS CloudFormation stack.
+
+  # SSM parameter paths — resolved at deploy time
+  DomainNameSsmPath:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dns/domain-name
+    Description: SSM parameter containing the root domain (e.g. alainjunia.com).
+
+  HostedZoneIdSsmPath:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dns/hosted-zone-id
+    Description: SSM parameter containing the Route53 hosted zone ID.
+
+Resources:
+  # ---------------------------------------------------------------
+  # CNAME: <AppName>.<AppsSubdomain>.<domain> → ECS Express endpoint
+  # An alias record cannot be used because the Express endpoint
+  # (*.ecs.<region>.on.aws) is not a standard ALB — it has no
+  # canonical hosted zone ID exposed to CloudFormation.
+  # ---------------------------------------------------------------
+  DnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneIdSsmPath
+      Name: !Sub "${AppName}.${AppsSubdomain}.${DomainNameSsmPath}."
+      Type: CNAME
+      TTL: "300"
+      ResourceRecords:
+        - Fn::ImportValue: !Sub "${EcsStackName}-AlbDnsName"
+
+Outputs:
+  AppUrl:
+    Description: HTTPS URL for this app (custom subdomain)
+    Value: !Sub "https://${AppName}.${AppsSubdomain}.${DomainNameSsmPath}"
+    Export:
+      Name: !Sub "${AWS::StackName}-AppUrl"

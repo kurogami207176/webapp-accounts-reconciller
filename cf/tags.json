@@ -1,0 +1,5 @@
+[
+  { "Key": "git_repo",    "Value": "https://github.com/kurogami207176/webapp-accounts-reconciller" },
+  { "Key": "managed_by",  "Value": "cloudformation" },
+  { "Key": "team",        "Value": "platform" }
+]

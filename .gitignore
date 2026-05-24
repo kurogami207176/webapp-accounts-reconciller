@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Terraform / misc
+*.tfstate
+*.tfstate.backup
+.DS_Store
+*.log
+
+# Alembic (don't ignore versions)
+
+# Flask app
+app/__pycache__/
+app/*.pyc
+app/.venv/
+app/.pytest_cache/
+app/.coverage
+app/coverage.xml
+app/htmlcov/
+app/.env
+app/.env.local
+.idea
