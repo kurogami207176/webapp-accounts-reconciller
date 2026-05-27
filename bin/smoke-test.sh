@@ -82,7 +82,7 @@ run_test() {
 
   local status=""
   for i in $(seq 1 "${RETRIES}"); do
-    status=$(curl -s -o "${tmp}" -w "%{http_code}" "${url}")
+    status=$(curl -s -o "${tmp}" -w "%{http_code}" --connect-timeout 10 --max-time 30 "${url}" 2>/dev/null || echo "000")
     if [[ "${status}" == "${expected_status}" ]]; then
       break
     fi
