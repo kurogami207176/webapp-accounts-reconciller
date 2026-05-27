@@ -300,25 +300,21 @@ Resources:
 
       # Place tasks in the private subnets of the shared VPC.
       # ECS Express will attach to the shared ALB security group automatically.
-      VpcId:
-        Fn::ImportValue: !If
-          - HasNetworkStackName
-          - !Sub "${NetworkStackName}-VpcId"
-          - !Sub "webapp-${Environment}-VpcId"
-      SubnetIds:
-        - Fn::ImportValue: !If
-            - HasNetworkStackName
-            - !Sub "${NetworkStackName}-PrivateSubnet1Id"
-            - !Sub "webapp-${Environment}-PrivateSubnet1Id"
-        - Fn::ImportValue: !If
-            - HasNetworkStackName
-            - !Sub "${NetworkStackName}-PrivateSubnet2Id"
-            - !Sub "webapp-${Environment}-PrivateSubnet2Id"
-      SecurityGroupIds:
-        - Fn::ImportValue: !If
-            - HasNetworkStackName
-            - !Sub "${NetworkStackName}-AppSecurityGroupId"
-            - !Sub "webapp-${Environment}-AppSecurityGroupId"
+      NetworkConfiguration:
+        Subnets:
+          - Fn::ImportValue: !If
+              - HasNetworkStackName
+              - !Sub "${NetworkStackName}-PrivateSubnet1Id"
+              - !Sub "webapp-${Environment}-PrivateSubnet1Id"
+          - Fn::ImportValue: !If
+              - HasNetworkStackName
+              - !Sub "${NetworkStackName}-PrivateSubnet2Id"
+              - !Sub "webapp-${Environment}-PrivateSubnet2Id"
+        SecurityGroups:
+          - Fn::ImportValue: !If
+              - HasNetworkStackName
+              - !Sub "${NetworkStackName}-AppSecurityGroupId"
+              - !Sub "webapp-${Environment}-AppSecurityGroupId"
 
       PrimaryContainer:
         Image: !Sub
