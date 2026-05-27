@@ -134,14 +134,33 @@ jobs:
           fi
 
           if [[ "${STACK_STATUS}" == "ROLLBACK_COMPLETE" || "${STACK_STATUS}" == "UPDATE_ROLLBACK_COMPLETE" || "${NEEDS_RECREATION}" == "true" ]]; then
-            echo "Deleting ECS stack (status=${STACK_STATUS}, needs_recreation=${NEEDS_RECREATION})..."
+            echo "Recreating ECS stack (status=${STACK_STATUS}, needs_recreation=${NEEDS_RECREATION})..."
+
+            # The DNS stack imports AlbDnsName from the ECS stack — must delete DNS first
+            DNS_STATUS=$(aws cloudformation describe-stacks \
+              --stack-name "${APP_NAME}-dns-${ENVIRONMENT}" \
+              --region "${AWS_REGION}" \
+              --query 'Stacks[0].StackStatus' \
+              --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+            if [[ "${DNS_STATUS}" != "DOES_NOT_EXIST" ]]; then
+              echo "  Deleting DNS stack first (it imports from ECS)..."
+              aws cloudformation delete-stack \
+                --stack-name "${APP_NAME}-dns-${ENVIRONMENT}" \
+                --region "${AWS_REGION}"
+              aws cloudformation wait stack-delete-complete \
+                --stack-name "${APP_NAME}-dns-${ENVIRONMENT}" \
+                --region "${AWS_REGION}"
+              echo "  DNS stack deleted."
+            fi
+
+            echo "  Deleting ECS stack..."
             aws cloudformation delete-stack \
               --stack-name "${APP_NAME}-ecs-${ENVIRONMENT}" \
               --region "${AWS_REGION}"
             aws cloudformation wait stack-delete-complete \
               --stack-name "${APP_NAME}-ecs-${ENVIRONMENT}" \
               --region "${AWS_REGION}"
-            echo "Stack deleted. Proceeding with fresh deploy."
+            echo "ECS stack deleted. Proceeding with fresh deploy."
           fi
 
           aws cloudformation deploy \
