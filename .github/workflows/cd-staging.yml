@@ -105,14 +105,36 @@ jobs:
           SECRET_KEY_ARN: ${{ vars.SECRET_KEY_ARN }}
           NETWORK_STACK_NAME: ${{ vars.NETWORK_STACK_NAME || 'webapp-production' }}
         run: |
-          # If the stack is stuck in ROLLBACK_COMPLETE, delete it so we can redeploy cleanly
+          # Delete stuck stacks (ROLLBACK_COMPLETE / UPDATE_ROLLBACK_COMPLETE) or
+          # stacks where the subnet type needs to change (not supported in-place).
           STACK_STATUS=$(aws cloudformation describe-stacks \
             --stack-name "${APP_NAME}-ecs-${ENVIRONMENT}" \
             --region "${AWS_REGION}" \
             --query 'Stacks[0].StackStatus' \
             --output text 2>/dev/null || echo "DOES_NOT_EXIST")
-          if [[ "${STACK_STATUS}" == "ROLLBACK_COMPLETE" ]]; then
-            echo "Stack is in ROLLBACK_COMPLETE — deleting before redeploy..."
+
+          # Detect whether the existing service uses private subnets (needs recreation)
+          NEEDS_RECREATION="false"
+          if [[ "${STACK_STATUS}" == "CREATE_COMPLETE" || "${STACK_STATUS}" == "UPDATE_COMPLETE" || "${STACK_STATUS}" == "UPDATE_ROLLBACK_COMPLETE" ]]; then
+            SERVICE_SUBNETS=$(aws ecs describe-services \
+              --cluster default \
+              --services "${APP_NAME}-${ENVIRONMENT}" \
+              --region "${AWS_REGION}" \
+              --query 'services[0].networkConfiguration.awsvpcConfiguration.subnets' \
+              --output json 2>/dev/null || echo "[]")
+            # Get public subnet IDs to compare
+            PUBLIC_SUBNET1=$(aws cloudformation list-exports \
+              --region "${AWS_REGION}" \
+              --query "Exports[?Name=='${NETWORK_STACK_NAME}-PublicSubnet1Id'].Value" \
+              --output text 2>/dev/null || echo "")
+            if [[ -n "${PUBLIC_SUBNET1}" ]] && ! echo "${SERVICE_SUBNETS}" | grep -q "${PUBLIC_SUBNET1}"; then
+              echo "Service is on private subnets but needs public — will recreate."
+              NEEDS_RECREATION="true"
+            fi
+          fi
+
+          if [[ "${STACK_STATUS}" == "ROLLBACK_COMPLETE" || "${STACK_STATUS}" == "UPDATE_ROLLBACK_COMPLETE" || "${NEEDS_RECREATION}" == "true" ]]; then
+            echo "Deleting ECS stack (status=${STACK_STATUS}, needs_recreation=${NEEDS_RECREATION})..."
             aws cloudformation delete-stack \
               --stack-name "${APP_NAME}-ecs-${ENVIRONMENT}" \
               --region "${AWS_REGION}"
