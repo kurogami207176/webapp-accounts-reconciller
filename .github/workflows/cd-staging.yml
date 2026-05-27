@@ -103,6 +103,7 @@ jobs:
           DB_STACK_NAME: ${{ vars.DB_STACK_NAME }}
           COGNITO_STACK_NAME: ${{ vars.COGNITO_STACK_NAME }}
           SECRET_KEY_ARN: ${{ vars.SECRET_KEY_ARN }}
+          NETWORK_STACK_NAME: ${{ vars.NETWORK_STACK_NAME || 'webapp-production' }}
         run: |
           aws cloudformation deploy \
             --template-file cf/ecs.yml \
@@ -112,6 +113,7 @@ jobs:
                 "Environment=${ENVIRONMENT}" \
                 "EcrStackName=${APP_NAME}-ecr" \
                 "ImageTag=${IMAGE_TAG}" \
+                "NetworkStackName=${NETWORK_STACK_NAME}" \
                 "DatabaseStackName=${DB_STACK_NAME}" \
                 "S3StackName=${APP_NAME}-s3-${ENVIRONMENT}" \
                 "CognitoStackName=${COGNITO_STACK_NAME}" \
