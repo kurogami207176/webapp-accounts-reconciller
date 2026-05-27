@@ -105,6 +105,23 @@ jobs:
           SECRET_KEY_ARN: ${{ vars.SECRET_KEY_ARN }}
           NETWORK_STACK_NAME: ${{ vars.NETWORK_STACK_NAME || 'webapp-production' }}
         run: |
+          # If the stack is stuck in ROLLBACK_COMPLETE, delete it so we can redeploy cleanly
+          STACK_STATUS=$(aws cloudformation describe-stacks \
+            --stack-name "${APP_NAME}-ecs-${ENVIRONMENT}" \
+            --region "${AWS_REGION}" \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          if [[ "${STACK_STATUS}" == "ROLLBACK_COMPLETE" ]]; then
+            echo "Stack is in ROLLBACK_COMPLETE — deleting before redeploy..."
+            aws cloudformation delete-stack \
+              --stack-name "${APP_NAME}-ecs-${ENVIRONMENT}" \
+              --region "${AWS_REGION}"
+            aws cloudformation wait stack-delete-complete \
+              --stack-name "${APP_NAME}-ecs-${ENVIRONMENT}" \
+              --region "${AWS_REGION}"
+            echo "Stack deleted. Proceeding with fresh deploy."
+          fi
+
           aws cloudformation deploy \
             --template-file cf/ecs.yml \
             --stack-name "${APP_NAME}-ecs-${ENVIRONMENT}" \
