@@ -2,10 +2,11 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from flask import Flask, g, jsonify
+from flask import Flask, g, jsonify, redirect, url_for
 
 from auth import register_auth_routes, require_auth
 from db import get_pool
+from roles import is_admin, is_branch_user
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,30 @@ app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 
 # Register /auth/* routes (login, callback, logout, me)
 register_auth_routes(app)
+
+# Register feature blueprints
+from blueprints.branch import branch_bp  # noqa: E402
+from blueprints.admin import admin_bp    # noqa: E402
+from blueprints.api import api_bp        # noqa: E402
+
+app.register_blueprint(branch_bp)
+app.register_blueprint(admin_bp)
+app.register_blueprint(api_bp)
+
+
+# ---------------------------------------------------------------------------
+# Template context — inject user info into every template
+# ---------------------------------------------------------------------------
+
+@app.context_processor
+def inject_user():
+    """Make current_user and role flags available in all templates."""
+    current_user = None
+    is_admin_user = False
+    if hasattr(g, "claims"):
+        current_user = g.email or g.user_id
+        is_admin_user = is_admin(g.claims)
+    return dict(current_user=current_user, is_admin_user=is_admin_user)
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +88,12 @@ def health_db():
 
 @app.get("/")
 def index():
+    """Root — redirect authenticated users to their landing page."""
+    if hasattr(g, "claims"):
+        if is_admin(g.claims):
+            return redirect(url_for("admin.dashboard"))
+        if is_branch_user(g.claims):
+            return redirect(url_for("branch.upload_online"))
     return jsonify(message="webapp-accounts-reconciller API", version="1.0.0")
 
 

@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Admin Dashboard{% endblock %}
+{% block content %}
+<div class="card">
+  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem;">
+    <h1>📊 Statement Uploads</h1>
+    <a href="/admin/upload/statement" class="btn btn-primary btn-sm">+ Upload Statement</a>
+  </div>
+
+  {% if files %}
+    <table>
+      <thead>
+        <tr>
+          <th>Uploaded</th>
+          <th>Type</th>
+          <th>Status</th>
+          <th>Comment</th>
+          <th>By</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in files %}
+          <tr>
+            <td style="font-size:0.8rem; color:#6b7280;">
+              {{ f.created_at.strftime('%Y-%m-%d %H:%M') if f.created_at else '—' }}
+            </td>
+            <td><span class="badge badge-pending" style="background:#e0f2fe; color:#0369a1;">
+              {{ f.statement_type | upper }}
+            </span></td>
+            <td>
+              <span class="badge badge-{{ f.status | lower }}" id="status-{{ f.id }}">
+                {{ f.status }}
+              </span>
+            </td>
+            <td style="font-size:0.85rem; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+              {{ f.comment or '—' }}
+            </td>
+            <td style="font-size:0.8rem; color:#6b7280;">{{ f.uploaded_by[:8] }}…</td>
+            <td style="white-space:nowrap;">
+              <a href="/admin/statement/{{ f.id }}" class="btn btn-secondary btn-sm">View</a>
+              {% if f.status in ('PENDING', 'FAILED') %}
+                <button class="btn btn-primary btn-sm"
+                        onclick="triggerParse('{{ f.id }}')"
+                        id="parse-btn-{{ f.id }}">
+                  Parse
+                </button>
+              {% endif %}
+              {% if f.status == 'INSERTED' %}
+                <button class="btn btn-secondary btn-sm"
+                        onclick="triggerMatch('{{ f.id }}')"
+                        id="match-btn-{{ f.id }}">
+                  Match
+                </button>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">No statements uploaded yet.</div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function triggerParse(fileId) {
+  const btn = document.getElementById(`parse-btn-${fileId}`);
+  btn.disabled = true; btn.textContent = 'Triggering…';
+  try {
+    const resp = await fetch(`/api/admin/statement/${fileId}/parse`, { method: 'POST' });
+    const data = await resp.json();
+    if (resp.ok) {
+      btn.textContent = 'Running…';
+      pollStatus(fileId);
+    } else {
+      alert(data.error || 'Failed to trigger parse');
+      btn.disabled = false; btn.textContent = 'Parse';
+    }
+  } catch (e) {
+    alert('Network error'); btn.disabled = false; btn.textContent = 'Parse';
+  }
+}
+
+async function triggerMatch(fileId) {
+  const btn = document.getElementById(`match-btn-${fileId}`);
+  btn.disabled = true; btn.textContent = 'Triggering…';
+  try {
+    const resp = await fetch(`/api/admin/statement/${fileId}/match`, { method: 'POST' });
+    const data = await resp.json();
+    if (resp.ok) {
+      btn.textContent = 'Matching…';
+      pollStatus(fileId);
+    } else {
+      alert(data.error || 'Failed to trigger match');
+      btn.disabled = false; btn.textContent = 'Match';
+    }
+  } catch (e) {
+    alert('Network error'); btn.disabled = false; btn.textContent = 'Match';
+  }
+}
+
+function pollStatus(fileId, attempts = 0) {
+  if (attempts > 30) return;  // stop after ~5 min
+  setTimeout(async () => {
+    try {
+      const resp = await fetch(`/api/admin/statement/${fileId}/status`);
+      const data = await resp.json();
+      const badge = document.getElementById(`status-${fileId}`);
+      if (badge) {
+        badge.className = `badge badge-${data.status.toLowerCase()}`;
+        badge.textContent = data.status;
+      }
+      if (!['INSERTED', 'FAILED'].includes(data.status)) {
+        pollStatus(fileId, attempts + 1);
+      } else {
+        // Reload to update action buttons
+        location.reload();
+      }
+    } catch (e) { /* ignore polling errors */ }
+  }, 10000);
+}
+</script>
+{% endblock %}

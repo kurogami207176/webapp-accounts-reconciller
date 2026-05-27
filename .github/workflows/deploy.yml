@@ -111,6 +111,36 @@ jobs:
             --region "${AWS_REGION}" \
             --no-fail-on-empty-changeset
 
+      # ---- Deploy S3 reconciler bucket --------------------------------
+      - name: Deploy S3 stack
+        run: |
+          CF_TAGS=$(jq -r '.[] | "\(.Key)=\(.Value)"' cf/tags.json | tr '\n' ' ')
+          aws cloudformation deploy \
+            --template-file cf/s3.yml \
+            --stack-name "${APP_NAME}-s3-${ENVIRONMENT}" \
+            --parameter-overrides \
+                "AppName=${APP_NAME}" \
+                "Environment=${ENVIRONMENT}" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --tags ${CF_TAGS} \
+            --region "${AWS_REGION}" \
+            --no-fail-on-empty-changeset
+
+      # ---- Deploy Glue crawlers ----------------------------------------
+      - name: Deploy Glue stack
+        run: |
+          CF_TAGS=$(jq -r '.[] | "\(.Key)=\(.Value)"' cf/tags.json | tr '\n' ' ')
+          aws cloudformation deploy \
+            --template-file cf/glue.yml \
+            --stack-name "${APP_NAME}-glue-${ENVIRONMENT}" \
+            --parameter-overrides \
+                "AppName=${APP_NAME}" \
+                "Environment=${ENVIRONMENT}" \
+                "S3StackName=${APP_NAME}-s3-${ENVIRONMENT}" \
+            --tags ${CF_TAGS} \
+            --region "${AWS_REGION}" \
+            --no-fail-on-empty-changeset
+
       # ---- ECR login ---------------------------------------------------
       - name: Login to Amazon ECR
         id: login-ecr
@@ -158,6 +188,7 @@ jobs:
                 "EcrStackName=${APP_NAME}-ecr" \
                 "ImageTag=${IMAGE_TAG}" \
                 "DatabaseStackName=${DB_STACK_NAME}" \
+                "S3StackName=${APP_NAME}-s3-${ENVIRONMENT}" \
                 "CognitoStackName=${COGNITO_STACK_NAME}" \
                 "SecretKeyArn=${SECRET_KEY_ARN}" \
             --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \

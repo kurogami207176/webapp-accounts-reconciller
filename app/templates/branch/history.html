@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}My Submissions — {{ group_id }}{% endblock %}
+{% block content %}
+<div class="card">
+  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem;">
+    <h1>📋 My Submissions</h1>
+    <div style="display:flex; gap:0.5rem;">
+      <a href="/branch/upload/online" class="btn btn-primary btn-sm">+ Online Txn</a>
+      <a href="/branch/upload/deposit" class="btn btn-secondary btn-sm">+ Bank Deposit</a>
+    </div>
+  </div>
+  {% if group_id %}
+    <p style="font-size:0.8rem; color:#6b7280; margin-bottom:1rem;">Branch: <strong>{{ group_id }}</strong></p>
+  {% endif %}
+
+  {% if submissions %}
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Time</th>
+          <th>Type</th>
+          <th>Payment</th>
+          <th>Amount</th>
+          <th>Staff</th>
+          <th>Status</th>
+          <th>Submitted</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in submissions %}
+          <tr>
+            <td>{{ s.transaction_date }}</td>
+            <td>{{ s.transaction_time }}</td>
+            <td>{{ s.upload_type | replace('_', ' ') | title }}</td>
+            <td>{{ s.payment_type | upper }}</td>
+            <td style="text-align:right; font-variant-numeric:tabular-nums;">
+              ₱{{ "%.2f"|format(s.amount | float) }}
+            </td>
+            <td>{{ s.staff_name }}</td>
+            <td>
+              <span class="badge badge-{{ s.status | lower }}">{{ s.status }}</span>
+            </td>
+            <td style="font-size:0.8rem; color:#6b7280;">
+              {{ s.created_at.strftime('%Y-%m-%d %H:%M') if s.created_at else '—' }}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">No submissions yet. Upload your first receipt above.</div>
+  {% endif %}
+</div>
+{% endblock %}

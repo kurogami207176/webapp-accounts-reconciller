@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}Audit Reports{% endblock %}
+{% block content %}
+
+{# ── 1. Statement Status Summary ────────────────────────────────────────────── #}
+<div class="card">
+  <div class="section-title">📁 Statement Upload Status</div>
+  {% if data.statement_status_summary %}
+    <table>
+      <thead><tr><th>Status</th><th>Count</th></tr></thead>
+      <tbody>
+        {% for row in data.statement_status_summary %}
+          <tr>
+            <td><span class="badge badge-{{ row.status | lower }}">{{ row.status }}</span></td>
+            <td>{{ row.count }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">No data</div>
+  {% endif %}
+</div>
+
+{# ── 2 & 3. Matched / Unmatched per Branch ──────────────────────────────────── #}
+<div style="display:grid; grid-template-columns:1fr 1fr; gap:1.5rem;">
+  <div class="card">
+    <div class="section-title">✅ Matched Transactions per Branch</div>
+    {% if data.matched_per_branch %}
+      <table>
+        <thead><tr><th>Branch</th><th>Count</th><th>Total Amount</th></tr></thead>
+        <tbody>
+          {% for row in data.matched_per_branch %}
+            <tr>
+              <td>{{ row.group_id }}</td>
+              <td>{{ row.count }}</td>
+              <td>₱{{ "%.2f"|format(row.amount | float) }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty">No matched transactions</div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="section-title">⚠️ Unmatched Transactions per Branch</div>
+    {% if data.unmatched_per_branch %}
+      <table>
+        <thead><tr><th>Branch</th><th>Count</th><th>Total Amount</th></tr></thead>
+        <tbody>
+          {% for row in data.unmatched_per_branch %}
+            <tr>
+              <td>{{ row.group_id }}</td>
+              <td style="color:#dc2626; font-weight:600;">{{ row.count }}</td>
+              <td>₱{{ "%.2f"|format(row.amount | float) }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty">No unmatched submissions 🎉</div>
+    {% endif %}
+  </div>
+</div>
+
+{# ── 4. Parse Failures ───────────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="section-title">❌ Parse Failures</div>
+  {% if data.parse_failures %}
+    <table>
+      <thead><tr><th>Uploaded</th><th>Type</th><th>Error</th></tr></thead>
+      <tbody>
+        {% for row in data.parse_failures %}
+          <tr>
+            <td style="font-size:0.8rem; white-space:nowrap;">
+              <a href="/admin/statement/{{ row.id }}">
+                {{ row.created_at.strftime('%Y-%m-%d %H:%M') if row.created_at else '—' }}
+              </a>
+            </td>
+            <td>{{ row.statement_type | upper }}</td>
+            <td style="font-size:0.8rem; color:#dc2626; max-width:400px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+              {{ row.parse_error }}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">No parse failures 🎉</div>
+  {% endif %}
+</div>
+
+{# ── 5. Duplicate Submissions ────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="section-title">🔁 Potential Duplicate Submissions</div>
+  <p style="font-size:0.8rem; color:#6b7280; margin-bottom:0.75rem;">
+    Same branch + date + amount + payment type appearing more than once.
+  </p>
+  {% if data.duplicates %}
+    <table>
+      <thead><tr><th>Branch</th><th>Date</th><th>Amount</th><th>Type</th><th>Count</th></tr></thead>
+      <tbody>
+        {% for row in data.duplicates %}
+          <tr>
+            <td>{{ row.group_id }}</td>
+            <td>{{ row.date }}</td>
+            <td>₱{{ "%.2f"|format(row.amount | float) }}</td>
+            <td>{{ row.payment_type | upper }}</td>
+            <td style="color:#dc2626; font-weight:600;">{{ row.count }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">No duplicates found 🎉</div>
+  {% endif %}
+</div>
+
+{# ── 6. Late Submissions ─────────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="section-title">⏰ Late Submissions (&gt;2 days after transaction)</div>
+  {% if data.late_submissions %}
+    <table>
+      <thead><tr><th>Branch</th><th>Txn Date</th><th>Submitted</th><th>Days Late</th><th>Amount</th></tr></thead>
+      <tbody>
+        {% for row in data.late_submissions %}
+          <tr>
+            <td>{{ row.group_id }}</td>
+            <td>{{ row.transaction_date }}</td>
+            <td style="font-size:0.8rem;">
+              {{ row.created_at.strftime('%Y-%m-%d') if row.created_at else '—' }}
+            </td>
+            <td style="color:#dc2626; font-weight:600;">{{ row.days_late }}</td>
+            <td>₱{{ "%.2f"|format(row.amount | float) }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">No late submissions 🎉</div>
+  {% endif %}
+</div>
+
+{# ── 7. Statement Coverage ────────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="section-title">📅 Statement Coverage</div>
+  <p style="font-size:0.8rem; color:#6b7280; margin-bottom:0.75rem;">
+    Date range of transactions extracted per statement.
+  </p>
+  {% if data.statement_coverage %}
+    <table>
+      <thead>
+        <tr>
+          <th>Uploaded</th><th>Type</th><th>Earliest Txn</th><th>Latest Txn</th><th>Txn Count</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in data.statement_coverage %}
+          <tr>
+            <td style="font-size:0.8rem;">
+              <a href="/admin/statement/{{ row.id }}">
+                {{ row.uploaded_at.strftime('%Y-%m-%d') if row.uploaded_at else '—' }}
+              </a>
+            </td>
+            <td>{{ row.statement_type | upper }}</td>
+            <td style="font-size:0.8rem;">
+              {{ row.earliest_txn.strftime('%Y-%m-%d') if row.earliest_txn else '—' }}
+            </td>
+            <td style="font-size:0.8rem;">
+              {{ row.latest_txn.strftime('%Y-%m-%d') if row.latest_txn else '—' }}
+            </td>
+            <td>{{ row.txn_count or 0 }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">No inserted statements yet</div>
+  {% endif %}
+</div>
+
+{% endblock %}

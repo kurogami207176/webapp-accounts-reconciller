@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Accounts Reconciler{% endblock %}</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f5f7fa; color: #1a1a2e; min-height: 100vh; }
+    nav { background: #1a1a2e; color: #fff; padding: 0 1.5rem; display: flex; align-items: center; gap: 2rem; height: 56px; }
+    nav a { color: #cbd5e1; text-decoration: none; font-size: 0.9rem; padding: 0.25rem 0.5rem; border-radius: 4px; transition: background 0.15s; }
+    nav a:hover, nav a.active { background: rgba(255,255,255,0.12); color: #fff; }
+    nav .brand { font-weight: 700; font-size: 1rem; color: #fff; margin-right: auto; }
+    nav .user { font-size: 0.8rem; color: #94a3b8; }
+    .container { max-width: 1100px; margin: 2rem auto; padding: 0 1.5rem; }
+    .card { background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 1.5rem; margin-bottom: 1.5rem; }
+    h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 1rem; }
+    h2 { font-size: 1.2rem; font-weight: 600; margin-bottom: 0.75rem; }
+    .btn { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.5rem 1rem; border-radius: 6px; border: none; cursor: pointer; font-size: 0.875rem; font-weight: 500; text-decoration: none; transition: opacity 0.15s; }
+    .btn:hover { opacity: 0.85; }
+    .btn-primary { background: #3b82f6; color: #fff; }
+    .btn-secondary { background: #e2e8f0; color: #334155; }
+    .btn-danger { background: #ef4444; color: #fff; }
+    .btn-sm { padding: 0.3rem 0.7rem; font-size: 0.8rem; }
+    .form-group { margin-bottom: 1rem; }
+    label { display: block; font-size: 0.85rem; font-weight: 500; margin-bottom: 0.35rem; color: #374151; }
+    input, select, textarea { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.875rem; background: #fff; }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    th { text-align: left; padding: 0.6rem 0.75rem; background: #f8fafc; border-bottom: 2px solid #e2e8f0; font-weight: 600; color: #475569; }
+    td { padding: 0.6rem 0.75rem; border-bottom: 1px solid #f1f5f9; }
+    tr:hover td { background: #f8fafc; }
+    .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+    .badge-pending    { background: #fef3c7; color: #92400e; }
+    .badge-parsed     { background: #dbeafe; color: #1e40af; }
+    .badge-inserted   { background: #d1fae5; color: #065f46; }
+    .badge-failed     { background: #fee2e2; color: #991b1b; }
+    .badge-unmatched  { background: #f3f4f6; color: #6b7280; }
+    .badge-matched    { background: #d1fae5; color: #065f46; }
+    .flash { padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.875rem; }
+    .flash-success { background: #d1fae5; color: #065f46; }
+    .flash-error   { background: #fee2e2; color: #991b1b; }
+    .flash-warning { background: #fef3c7; color: #92400e; }
+    .flash-info    { background: #dbeafe; color: #1e40af; }
+    .empty { text-align: center; padding: 2rem; color: #94a3b8; font-size: 0.9rem; }
+    .section-title { font-size: 1rem; font-weight: 600; color: #374151; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.5rem; margin-bottom: 1rem; }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <nav>
+    <span class="brand">🏦 Reconciler</span>
+    {% if current_user %}
+      {% if is_admin_user %}
+        <a href="/admin/dashboard">Dashboard</a>
+        <a href="/admin/upload/statement">Upload Statement</a>
+        <a href="/admin/reports">Reports</a>
+      {% else %}
+        <a href="/branch/upload/online">Online Transaction</a>
+        <a href="/branch/upload/deposit">Bank Deposit</a>
+        <a href="/branch/history">History</a>
+      {% endif %}
+      <span class="user">{{ current_user }}</span>
+      <a href="/auth/logout">Logout</a>
+    {% else %}
+      <a href="/auth/login">Login</a>
+    {% endif %}
+  </nav>
+
+  <div class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="flash flash-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </div>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,154 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  S3 bucket for webapp-accounts-reconciller — stores receipt photos, info JSONs,
+  parsed transactions, and match results. Exports bucket name/ARN via CloudFormation
+  exports and SSM parameters so other stacks and local scripts can reference it.
+
+Parameters:
+  AppName:
+    Type: String
+    Default: webapp-accounts-reconciller
+
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [staging, production]
+
+Resources:
+
+  # ── S3 Bucket ───────────────────────────────────────────────────────────────
+  ReconcilerBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${AppName}-${Environment}-reconciler"
+      # Versioning — protects against accidental overwrites of info JSONs
+      VersioningConfiguration:
+        Status: Enabled
+      # Encryption at rest
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      # Block all public access — app accesses via IAM only
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # Lifecycle: expire old untagged multipart uploads
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      # CORS — only needed if browser uploads directly; for now app proxies uploads
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods: [GET, PUT, POST]
+            AllowedOrigins: ["*"]
+            AllowedHeaders: ["*"]
+            MaxAge: 3000
+      Tags:
+        - Key: AppName
+          Value: !Ref AppName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── Bucket policy — deny non-SSL access ────────────────────────────────────
+  ReconcilerBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ReconcilerBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyNonSSL
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt ReconcilerBucket.Arn
+              - !Sub "${ReconcilerBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+  # ── IAM Role for Glue Crawler ───────────────────────────────────────────────
+  GlueCrawlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppName}-${Environment}-glue-crawler-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: S3ReadInfo
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadInfoPrefix
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt ReconcilerBucket.Arn
+                  - !Sub "${ReconcilerBucket.Arn}/info/*"
+      Tags:
+        - Key: AppName
+          Value: !Ref AppName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── SSM Parameters — bucket name and ARN for cross-stack/cross-repo use ────
+  SsmBucketName:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${AppName}/${Environment}/s3/bucket-name"
+      Type: String
+      Value: !Ref ReconcilerBucket
+      Description: !Sub "S3 reconciler bucket name for ${AppName}-${Environment}"
+
+  SsmBucketArn:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${AppName}/${Environment}/s3/bucket-arn"
+      Type: String
+      Value: !GetAtt ReconcilerBucket.Arn
+      Description: !Sub "S3 reconciler bucket ARN for ${AppName}-${Environment}"
+
+  SsmGlueCrawlerRoleArn:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${AppName}/${Environment}/s3/glue-crawler-role-arn"
+      Type: String
+      Value: !GetAtt GlueCrawlerRole.Arn
+      Description: !Sub "Glue crawler IAM role ARN for ${AppName}-${Environment}"
+
+Outputs:
+  BucketName:
+    Description: S3 reconciler bucket name
+    Value: !Ref ReconcilerBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-BucketName"
+
+  BucketArn:
+    Description: S3 reconciler bucket ARN
+    Value: !GetAtt ReconcilerBucket.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-BucketArn"
+
+  GlueCrawlerRoleArn:
+    Description: IAM role ARN for the Glue crawler
+    Value: !GetAtt GlueCrawlerRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-GlueCrawlerRoleArn"

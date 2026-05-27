@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Upload Bank Deposit{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>🏦 Upload Bank Deposit Slip</h1>
+  <form method="POST" enctype="multipart/form-data">
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
+      <div class="form-group">
+        <label for="transaction_date">Deposit Date *</label>
+        <input type="date" id="transaction_date" name="transaction_date" required
+               value="{{ form.transaction_date if form else '' }}">
+      </div>
+      <div class="form-group">
+        <label for="transaction_time">Deposit Time *</label>
+        <input type="time" id="transaction_time" name="transaction_time" required
+               value="{{ form.transaction_time if form else '' }}">
+      </div>
+      <div class="form-group">
+        <label for="amount">Amount (PHP) *</label>
+        <input type="number" id="amount" name="amount" min="0.01" step="0.01" required
+               placeholder="0.00" value="{{ form.amount if form else '' }}">
+      </div>
+      <div class="form-group">
+        <label for="bank_type">Bank *</label>
+        <select id="bank_type" name="bank_type" required>
+          <option value="">— select —</option>
+          {% for bt in bank_types %}
+            <option value="{{ bt }}" {% if form and form.bank_type == bt %}selected{% endif %}>
+              {{ bt | upper }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="staff_name">Staff Name *</label>
+        <input type="text" id="staff_name" name="staff_name" required
+               placeholder="Full name of staff member"
+               value="{{ form.staff_name if form else '' }}">
+      </div>
+      <div class="form-group">
+        <label for="reference_number">Reference / Slip Number</label>
+        <input type="text" id="reference_number" name="reference_number"
+               placeholder="Optional bank slip reference"
+               value="{{ form.reference_number if form else '' }}">
+      </div>
+      <div class="form-group" style="grid-column:1/-1">
+        <label for="for_day">Clearing Date (For Day) *</label>
+        <input type="date" id="for_day" name="for_day" required
+               value="{{ form.for_day if form else '' }}">
+        <small style="color:#6b7280; font-size:0.8rem;">
+          The date the check/deposit clears (value date)
+        </small>
+      </div>
+      <div class="form-group" style="grid-column:1/-1">
+        <label for="photo">Deposit Slip Photo *</label>
+        <input type="file" id="photo" name="photo" accept="image/*,.pdf" required>
+        <small style="color:#6b7280; font-size:0.8rem;">JPG, PNG, HEIC or PDF — max 10 MB</small>
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary">Upload Deposit Slip</button>
+    <a href="/branch/history" class="btn btn-secondary" style="margin-left:0.5rem">Cancel</a>
+  </form>
+</div>
+{% endblock %}

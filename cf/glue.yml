@@ -1,0 +1,151 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  AWS Glue database and crawler for the reconciler S3 info/ prefix.
+  The crawler auto-discovers partitions (group, upload_type, payment_type, year, month)
+  and registers them in the Glue Data Catalog so Athena/QuickSight can query them.
+  Depends on cf/s3.yml being deployed first.
+
+Parameters:
+  AppName:
+    Type: String
+    Default: webapp-accounts-reconciller
+
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [staging, production]
+
+  S3StackName:
+    Type: String
+    Description: Name of the deployed S3 CloudFormation stack (cf/s3.yml).
+    Default: webapp-accounts-reconciller-s3-production
+
+  # How often the crawler runs (cron expression)
+  CrawlerSchedule:
+    Type: String
+    Default: "cron(0 2 * * ? *)"
+    Description: >
+      Schedule for the Glue crawler. Default: daily at 02:00 UTC.
+      Set to empty string to disable scheduled runs (manual only).
+
+Conditions:
+  HasSchedule: !Not [!Equals [!Ref CrawlerSchedule, ""]]
+
+Resources:
+
+  # ── Glue Database ───────────────────────────────────────────────────────────
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Sub "${AppName}_${Environment}_reconciler"
+        Description: !Sub "Reconciler info data for ${AppName} ${Environment}"
+
+  # ── Glue Crawler — info/ prefix ─────────────────────────────────────────────
+  # Crawls s3://<bucket>/info/ to register submission metadata as Glue tables.
+  # Partitions: group, upload_type, payment_type, year, month (Hive-style).
+  InfoCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub "${AppName}-${Environment}-info-crawler"
+      Role:
+        Fn::ImportValue: !Sub "${S3StackName}-GlueCrawlerRoleArn"
+      DatabaseName: !Ref GlueDatabase
+      Description: Crawls s3 info/ prefix and registers submission metadata tables
+      Targets:
+        S3Targets:
+          - Path: !Sub
+              - "s3://${Bucket}/info/"
+              - Bucket:
+                  Fn::ImportValue: !Sub "${S3StackName}-BucketName"
+      # Hive-compatible partitioning — discovers group=, upload_type=, etc.
+      Configuration: |
+        {
+          "Version": 1.0,
+          "CrawlerOutput": {
+            "Partitions": { "AddOrUpdateBehavior": "InheritFromTable" },
+            "Tables": { "AddOrUpdateBehavior": "MergeNewColumns" }
+          },
+          "Grouping": {
+            "TableGroupingPolicy": "CombineCompatibleSchemas"
+          }
+        }
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: LOG
+      Schedule: !If
+        - HasSchedule
+        - ScheduleExpression: !Ref CrawlerSchedule
+        - !Ref AWS::NoValue
+      Tags:
+        AppName: !Ref AppName
+        Environment: !Ref Environment
+
+  # ── Glue Crawler — transactions/ prefix ────────────────────────────────────
+  TransactionsCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub "${AppName}-${Environment}-transactions-crawler"
+      Role:
+        Fn::ImportValue: !Sub "${S3StackName}-GlueCrawlerRoleArn"
+      DatabaseName: !Ref GlueDatabase
+      Description: Crawls s3 transactions/ prefix and registers parsed transaction tables
+      Targets:
+        S3Targets:
+          - Path: !Sub
+              - "s3://${Bucket}/transactions/"
+              - Bucket:
+                  Fn::ImportValue: !Sub "${S3StackName}-BucketName"
+      Configuration: |
+        {
+          "Version": 1.0,
+          "CrawlerOutput": {
+            "Partitions": { "AddOrUpdateBehavior": "InheritFromTable" },
+            "Tables": { "AddOrUpdateBehavior": "MergeNewColumns" }
+          },
+          "Grouping": {
+            "TableGroupingPolicy": "CombineCompatibleSchemas"
+          }
+        }
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: LOG
+      Schedule: !If
+        - HasSchedule
+        - ScheduleExpression: !Ref CrawlerSchedule
+        - !Ref AWS::NoValue
+      Tags:
+        AppName: !Ref AppName
+        Environment: !Ref Environment
+
+  # ── SSM Parameters ──────────────────────────────────────────────────────────
+  SsmGlueDatabaseName:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${AppName}/${Environment}/glue/database-name"
+      Type: String
+      Value: !Ref GlueDatabase
+
+  SsmInfoCrawlerName:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${AppName}/${Environment}/glue/info-crawler-name"
+      Type: String
+      Value: !Ref InfoCrawler
+
+Outputs:
+  GlueDatabaseName:
+    Value: !Ref GlueDatabase
+    Export:
+      Name: !Sub "${AWS::StackName}-GlueDatabaseName"
+
+  InfoCrawlerName:
+    Value: !Ref InfoCrawler
+    Export:
+      Name: !Sub "${AWS::StackName}-InfoCrawlerName"
+
+  TransactionsCrawlerName:
+    Value: !Ref TransactionsCrawler
+    Export:
+      Name: !Sub "${AWS::StackName}-TransactionsCrawlerName"

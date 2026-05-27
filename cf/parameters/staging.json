@@ -1,8 +1,12 @@
 [
-  { "ParameterKey": "AppName",        "ParameterValue": "webapp-accounts-reconciller" },
-  { "ParameterKey": "Environment",    "ParameterValue": "staging" },
-  { "ParameterKey": "DesiredCount",   "ParameterValue": "1" },
-  { "ParameterKey": "TaskCpu",        "ParameterValue": "256" },
-  { "ParameterKey": "TaskMemory",     "ParameterValue": "512" },
-  { "ParameterKey": "LogRetentionDays", "ParameterValue": "7" }
+  { "ParameterKey": "AppName",           "ParameterValue": "webapp-accounts-reconciller" },
+  { "ParameterKey": "Environment",       "ParameterValue": "staging" },
+  { "ParameterKey": "NetworkStackName",  "ParameterValue": "webapp-staging-network" },
+  { "ParameterKey": "DatabaseStackName", "ParameterValue": "webapp-staging-database" },
+  { "ParameterKey": "S3StackName",       "ParameterValue": "webapp-accounts-reconciller-s3-staging" },
+  { "ParameterKey": "EcrStackName",      "ParameterValue": "webapp-accounts-reconciller-ecr" },
+  { "ParameterKey": "TaskCpu",           "ParameterValue": "256" },
+  { "ParameterKey": "TaskMemory",        "ParameterValue": "512" },
+  { "ParameterKey": "MinTaskCount",      "ParameterValue": "1" },
+  { "ParameterKey": "MaxTaskCount",      "ParameterValue": "3" }
 ]

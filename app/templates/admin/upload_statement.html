@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Upload Bank Statement{% endblock %}
+{% block content %}
+<div class="card" style="max-width:600px;">
+  <h1>📤 Upload Bank Statement</h1>
+  <form method="POST" enctype="multipart/form-data">
+    <div class="form-group">
+      <label for="statement_type">Statement Type *</label>
+      <select id="statement_type" name="statement_type" required>
+        <option value="">— select bank —</option>
+        {% for st in statement_types %}
+          <option value="{{ st }}" {% if form and form.statement_type == st %}selected{% endif %}>
+            {{ st | upper }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="statement_file">Statement File *</label>
+      <input type="file" id="statement_file" name="statement_file"
+             accept=".pdf,.csv,.xlsx,.xls,.zip" required>
+      <small style="color:#6b7280; font-size:0.8rem;">PDF, CSV, XLSX or ZIP — max 50 MB</small>
+    </div>
+    <div class="form-group">
+      <label for="file_password">File Password</label>
+      <input type="password" id="file_password" name="file_password"
+             placeholder="Leave blank if file is not encrypted"
+             value="{{ form.file_password if form else '' }}">
+      <small style="color:#6b7280; font-size:0.8rem;">
+        Required if the PDF is password-protected
+      </small>
+    </div>
+    <div class="form-group">
+      <label for="comment">Comment</label>
+      <textarea id="comment" name="comment" rows="2"
+                placeholder="e.g. GCash statement for April 2026">{{ form.comment if form else '' }}</textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">Upload &amp; Parse</button>
+    <a href="/admin/dashboard" class="btn btn-secondary" style="margin-left:0.5rem">Cancel</a>
+  </form>
+</div>
+{% endblock %}

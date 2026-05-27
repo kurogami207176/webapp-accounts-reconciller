@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Statement Detail — {{ file.statement_type | upper }}{% endblock %}
+{% block content %}
+<div class="card">
+  <div style="display:flex; align-items:flex-start; justify-content:space-between;">
+    <div>
+      <h1>{{ file.statement_type | upper }} Statement</h1>
+      <p style="color:#6b7280; font-size:0.85rem; margin-top:0.25rem;">
+        Uploaded {{ file.created_at.strftime('%Y-%m-%d %H:%M') if file.created_at else '—' }}
+        by {{ file.uploaded_by[:12] }}…
+      </p>
+    </div>
+    <div style="display:flex; gap:0.5rem; align-items:center;">
+      <span class="badge badge-{{ file.status | lower }}" id="status-badge">{{ file.status }}</span>
+      {% if presigned_url %}
+        <a href="{{ presigned_url }}" target="_blank" class="btn btn-secondary btn-sm">⬇ Download</a>
+      {% endif %}
+      {% if file.status in ('PENDING', 'FAILED') %}
+        <button class="btn btn-primary btn-sm" onclick="triggerParse('{{ file.id }}')">Parse</button>
+      {% endif %}
+      {% if file.status == 'INSERTED' %}
+        <button class="btn btn-secondary btn-sm" onclick="triggerMatch('{{ file.id }}')">Match</button>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if file.comment %}
+    <p style="margin-top:0.75rem; color:#374151; font-size:0.9rem;">💬 {{ file.comment }}</p>
+  {% endif %}
+
+  {% if file.parse_error %}
+    <div style="margin-top:1rem; padding:0.75rem 1rem; background:#fee2e2; border-radius:6px; font-size:0.85rem; color:#991b1b;">
+      <strong>Parse Error:</strong><br>
+      <pre style="white-space:pre-wrap; margin-top:0.5rem;">{{ file.parse_error }}</pre>
+    </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="section-title">
+    Parsed Transactions
+    <span style="font-weight:400; color:#6b7280; font-size:0.85rem;">({{ transactions | length }})</span>
+  </div>
+
+  {% if transactions %}
+    <table>
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th style="text-align:right;">Amount</th>
+          <th style="text-align:right;">Balance</th>
+          <th>Matched To</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in transactions %}
+          <tr>
+            <td style="font-size:0.8rem; white-space:nowrap;">
+              {{ t.transaction_timestamp.strftime('%Y-%m-%d %H:%M') if t.transaction_timestamp else '—' }}
+            </td>
+            <td>{{ t.transaction_type }}</td>
+            <td style="max-width:250px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+              {{ t.description or '—' }}
+            </td>
+            <td style="text-align:right; font-variant-numeric:tabular-nums;">
+              ₱{{ "%.2f"|format(t.amount | float) }}
+            </td>
+            <td style="text-align:right; font-variant-numeric:tabular-nums; color:#6b7280;">
+              ₱{{ "%.2f"|format(t.balance | float) }}
+            </td>
+            <td>
+              {% if t.matching_submission_id %}
+                <span class="badge badge-matched">✓ Matched</span>
+              {% else %}
+                <span class="badge badge-unmatched">—</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">
+      {% if file.status == 'PENDING' %}
+        File not yet parsed. Click "Parse" to extract transactions.
+      {% elif file.status == 'FAILED' %}
+        Parsing failed. See error above. Fix the issue and retry.
+      {% else %}
+        No transactions extracted.
+      {% endif %}
+    </div>
+  {% endif %}
+</div>
+
+<a href="/admin/dashboard" class="btn btn-secondary">← Back to Dashboard</a>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function triggerParse(fileId) {
+  const resp = await fetch(`/api/admin/statement/${fileId}/parse`, { method: 'POST' });
+  const data = await resp.json();
+  alert(data.message || data.error);
+  if (resp.ok) location.reload();
+}
+async function triggerMatch(fileId) {
+  const resp = await fetch(`/api/admin/statement/${fileId}/match`, { method: 'POST' });
+  const data = await resp.json();
+  alert(data.message || data.error);
+  if (resp.ok) location.reload();
+}
+</script>
+{% endblock %}

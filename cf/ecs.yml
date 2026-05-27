@@ -2,9 +2,13 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   ECS Express Mode service for webapp-accounts-reconciller.
   Automatically provisions the ALB, target group, security groups,
-  auto-scaling, and CloudWatch logs — no separate network stack required.
-  Depends on the ECR stack (cf/ecr.yml).
-  Optionally connects to Aurora via the database stack (cf in webapp-environment-setup).
+  auto-scaling, and CloudWatch logs.
+
+  Depends on:
+    - webapp-environment-setup network stack  (VPC, subnets, security groups)
+    - cf/ecr.yml                              (ECR repository)
+    - webapp-environment-setup database stack (Aurora — optional)
+    - cf/cognito.yml                          (Cognito — optional)
 
 Parameters:
   AppName:
@@ -16,17 +20,30 @@ Parameters:
     Default: production
     AllowedValues: [staging, production]
 
-  EcrStackName:
+  # ── Shared infrastructure stack names ──────────────────────────────────────
+  # The network and database stacks live in webapp-environment-setup and are
+  # shared across apps. The AppName there is "webapp" and the Env key is "Env"
+  # (not "Environment"), so exports follow the pattern: webapp-<env>-<resource>.
+  NetworkStackName:
     Type: String
-    Default: webapp-accounts-reconciller-ecr
-    Description: Name of the deployed ECR CloudFormation stack.
+    Description: >
+      Name of the deployed webapp-environment-setup network CloudFormation stack.
+      Exports must follow the pattern: <NetworkStackName>-<Resource>.
+      e.g. "webapp-staging-network" → exports "webapp-staging-network-VpcId".
+      Defaults match the webapp-environment-setup naming convention.
+    Default: ""
+
+  # Convenience: if NetworkStackName is left blank we derive the export prefix
+  # from the shared convention: webapp-<Environment>
+  # Override NetworkStackName to point at a differently-named stack.
 
   DatabaseStackName:
     Type: String
     Default: ""
     Description: >
-      Name of the deployed database CloudFormation stack (webapp-environment-setup).
+      Name of the deployed webapp-environment-setup database CloudFormation stack.
       Leave empty to run without a database — DB_SECRET_ARN will not be set.
+      e.g. "webapp-staging-database"
 
   CognitoStackName:
     Type: String
@@ -34,6 +51,19 @@ Parameters:
     Description: >
       Name of the deployed Cognito CloudFormation stack (cf/cognito.yml).
       Leave empty to run without authentication — auth routes will return 503.
+
+  EcrStackName:
+    Type: String
+    Default: webapp-accounts-reconciller-ecr
+    Description: Name of the deployed ECR CloudFormation stack.
+
+  S3StackName:
+    Type: String
+    Default: ""
+    Description: >
+      Name of the deployed S3 CloudFormation stack (cf/s3.yml).
+      Leave empty to run without S3 — S3_BUCKET_NAME will not be set.
+      e.g. "webapp-accounts-reconciller-s3-production"
 
   SecretKeyArn:
     Type: String
@@ -75,15 +105,22 @@ Parameters:
     MinValue: 1
     MaxValue: 10
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Conditions
+# ─────────────────────────────────────────────────────────────────────────────
 Conditions:
-  HasDatabase: !Not [!Equals [!Ref DatabaseStackName, ""]]
-  HasCognito:  !Not [!Equals [!Ref CognitoStackName, ""]]
-  HasSecretKey: !Not [!Equals [!Ref SecretKeyArn, ""]]
+  HasDatabase:        !Not [!Equals [!Ref DatabaseStackName, ""]]
+  HasCognito:         !Not [!Equals [!Ref CognitoStackName, ""]]
+  HasSecretKey:       !Not [!Equals [!Ref SecretKeyArn, ""]]
+  HasNetworkStackName: !Not [!Equals [!Ref NetworkStackName, ""]]
+  HasS3:              !Not [!Equals [!Ref S3StackName, ""]]
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Resources
+# ─────────────────────────────────────────────────────────────────────────────
 Resources:
-  # ---------------------------------------------------------------
-  # IAM — ECS task execution role (pull image, write logs)
-  # ---------------------------------------------------------------
+
+  # ── IAM — ECS task execution role (pull image, write logs) ─────────────────
   TaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -103,8 +140,7 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # IAM — Allow the execution role to fetch SECRET_KEY at container launch.
-  # The execution role (not the task role) handles secret injection at startup.
+  # Allow execution role to inject SECRET_KEY at container launch
   ExecutionRoleSecretKeyPolicy:
     Type: AWS::IAM::Policy
     Condition: HasSecretKey
@@ -117,11 +153,10 @@ Resources:
         Statement:
           - Sid: FetchSecretKey
             Effect: Allow
-            Action:
-              - secretsmanager:GetSecretValue
+            Action: secretsmanager:GetSecretValue
             Resource: !Ref SecretKeyArn
 
-  # IAM — ECS task role (runtime permissions for your app)
+  # ── IAM — ECS task role (runtime permissions for the app) ──────────────────
   TaskRole:
     Type: AWS::IAM::Role
     Properties:
@@ -139,9 +174,7 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # IAM — Inline policy granting the task role access to the DB secret.
-  # Scoped to the exact secret ARN exported by the database stack.
-  # Only created when DatabaseStackName is provided.
+  # Allow the task role to read the DB secret at runtime
   TaskRoleDbPolicy:
     Type: AWS::IAM::Policy
     Condition: HasDatabase
@@ -160,8 +193,7 @@ Resources:
             Resource:
               Fn::ImportValue: !Sub "${DatabaseStackName}-DbAppSecretArn"
 
-  # IAM — Allow task to read the Flask SECRET_KEY from Secrets Manager.
-  # Only created when SecretKeyArn is provided.
+  # Allow the task role to read the Flask SECRET_KEY
   TaskRoleSecretKeyPolicy:
     Type: AWS::IAM::Policy
     Condition: HasSecretKey
@@ -179,7 +211,54 @@ Resources:
               - secretsmanager:DescribeSecret
             Resource: !Ref SecretKeyArn
 
-  # IAM — Infrastructure role (ECS Express manages ALB, SGs, auto-scaling on your behalf)
+  # Allow the task role to read/write the reconciler S3 bucket and trigger ECS tasks
+  TaskRoleS3Policy:
+    Type: AWS::IAM::Policy
+    Condition: HasS3
+    Properties:
+      PolicyName: !Sub "${AppName}-${Environment}-s3-reconciler"
+      Roles:
+        - !Ref TaskRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: S3BucketList
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+              - s3:GetBucketLocation
+            Resource:
+              Fn::ImportValue: !Sub "${S3StackName}-BucketArn"
+          - Sid: S3ObjectReadWrite
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:GetObjectVersion
+            Resource: !Sub
+              - "${BucketArn}/*"
+              - BucketArn:
+                  Fn::ImportValue: !Sub "${S3StackName}-BucketArn"
+          # Allow ECS tasks to trigger one-off parser/matcher tasks (same task def)
+          - Sid: EcsRunTask
+            Effect: Allow
+            Action:
+              - ecs:RunTask
+              - ecs:DescribeTasks
+              - ecs:StopTask
+            Resource: "*"
+            Condition:
+              ArnEquals:
+                "ecs:cluster": !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${AppName}-${Environment}"
+          - Sid: PassRoleToEcs
+            Effect: Allow
+            Action: iam:PassRole
+            Resource:
+              - !GetAtt TaskRole.Arn
+              - !GetAtt TaskExecutionRole.Arn
+
+  # ── IAM — Infrastructure role (ECS Express manages ALB, SGs, auto-scaling) ─
   InfrastructureRole:
     Type: AWS::IAM::Role
     Properties:
@@ -199,11 +278,15 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # ---------------------------------------------------------------
-  # ECS Express Gateway Service
-  # Automatically provisions: ECS cluster, task definition, service,
-  # ALB, target group, security groups, auto-scaling, CloudWatch logs.
-  # ---------------------------------------------------------------
+  # ── ECS Express Gateway Service ─────────────────────────────────────────────
+  # Imports VPC, private subnets, and the app-tier security group from the
+  # shared webapp-environment-setup network stack.
+  #
+  # Export name convention from that stack:
+  #   webapp-<env>-VpcId
+  #   webapp-<env>-PrivateSubnet1Id / PrivateSubnet2Id
+  #   webapp-<env>-AppSecurityGroupId   (allows traffic from ALB only)
+  # ─────────────────────────────────────────────────────────────────────────────
   ExpressService:
     Type: AWS::ECS::ExpressGatewayService
     Properties:
@@ -214,6 +297,29 @@ Resources:
       Cpu: !Ref TaskCpu
       Memory: !Ref TaskMemory
       HealthCheckPath: /health
+
+      # Place tasks in the private subnets of the shared VPC.
+      # ECS Express will attach to the shared ALB security group automatically.
+      VpcId:
+        Fn::ImportValue: !If
+          - HasNetworkStackName
+          - !Sub "${NetworkStackName}-VpcId"
+          - !Sub "webapp-${Environment}-VpcId"
+      SubnetIds:
+        - Fn::ImportValue: !If
+            - HasNetworkStackName
+            - !Sub "${NetworkStackName}-PrivateSubnet1Id"
+            - !Sub "webapp-${Environment}-PrivateSubnet1Id"
+        - Fn::ImportValue: !If
+            - HasNetworkStackName
+            - !Sub "${NetworkStackName}-PrivateSubnet2Id"
+            - !Sub "webapp-${Environment}-PrivateSubnet2Id"
+      SecurityGroupIds:
+        - Fn::ImportValue: !If
+            - HasNetworkStackName
+            - !Sub "${NetworkStackName}-AppSecurityGroupId"
+            - !Sub "webapp-${Environment}-AppSecurityGroupId"
+
       PrimaryContainer:
         Image: !Sub
           - "${Uri}:${Tag}"
@@ -228,14 +334,20 @@ Resources:
             Value: !Ref Environment
           - Name: PYTHONDONTWRITEBYTECODE
             Value: "1"
-          # DB_SECRET_ARN — absent means no DB pool (db.py handles gracefully)
           - !If
             - HasDatabase
             - Name: DB_SECRET_ARN
               Value:
                 Fn::ImportValue: !Sub "${DatabaseStackName}-DbAppSecretArn"
             - !Ref AWS::NoValue
-          # Cognito config — plain env vars (not sensitive, safe to store here)
+          - !If
+            - HasS3
+            - Name: S3_BUCKET_NAME
+              Value:
+                Fn::ImportValue: !Sub "${S3StackName}-BucketName"
+            - !Ref AWS::NoValue
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
           - !If
             - HasCognito
             - Name: COGNITO_REGION
@@ -265,23 +377,26 @@ Resources:
               Value:
                 Fn::ImportValue: !Sub "${CognitoStackName}-HostedUiBaseUrl"
             - !Ref AWS::NoValue
-        # SECRET_KEY is fetched from Secrets Manager at task launch by ECS —
-        # never stored in plaintext in the task definition or CloudFormation.
         Secrets:
           - !If
             - HasSecretKey
             - Name: SECRET_KEY
               ValueFrom: !Ref SecretKeyArn
             - !Ref AWS::NoValue
+
       ScalingTarget:
         MinTaskCount: !Ref MinTaskCount
         MaxTaskCount: !Ref MaxTaskCount
+
       Tags:
         - Key: AppName
           Value: !Ref AppName
         - Key: Environment
           Value: !Ref Environment
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Outputs
+# ─────────────────────────────────────────────────────────────────────────────
 Outputs:
   ServiceArn:
     Value: !GetAtt ExpressService.ServiceArn
@@ -299,7 +414,6 @@ Outputs:
       Name: !Sub "${AWS::StackName}-AlbDnsName"
 
   TargetGroupArn:
-    # First target group in the managed list
     Value: !Select
       - 0
       - !GetAtt ExpressService.ECSManagedResourceArns.IngressPath.TargetGroupArns
