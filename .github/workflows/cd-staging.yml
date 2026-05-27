@@ -7,6 +7,11 @@ on:
 permissions:
   contents: read
 
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  APP_NAME: webapp-accounts-reconciller
+  ENVIRONMENT: staging
+
 jobs:
   deploy:
     name: Build & deploy to staging
@@ -23,29 +28,149 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # ---- Deploy ECR stack (idempotent — creates repo on first run) ----
+      - name: Deploy ECR stack
+        run: |
+          aws cloudformation deploy \
+            --template-file cf/ecr.yml \
+            --stack-name "${APP_NAME}-ecr" \
+            --parameter-overrides \
+                "AppName=${APP_NAME}" \
+                "Environment=${ENVIRONMENT}" \
+            --region "${AWS_REGION}" \
+            --no-fail-on-empty-changeset
+
+      # ---- Deploy S3 reconciler bucket --------------------------------
+      - name: Deploy S3 stack
+        run: |
+          CF_TAGS=$(jq -r '.[] | "\(.Key)=\(.Value)"' cf/tags.json | tr '\n' ' ')
+          aws cloudformation deploy \
+            --template-file cf/s3.yml \
+            --stack-name "${APP_NAME}-s3-${ENVIRONMENT}" \
+            --parameter-overrides \
+                "AppName=${APP_NAME}" \
+                "Environment=${ENVIRONMENT}" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --tags ${CF_TAGS} \
+            --region "${AWS_REGION}" \
+            --no-fail-on-empty-changeset
+
+      # ---- Deploy Glue crawlers ----------------------------------------
+      - name: Deploy Glue stack
+        run: |
+          CF_TAGS=$(jq -r '.[] | "\(.Key)=\(.Value)"' cf/tags.json | tr '\n' ' ')
+          aws cloudformation deploy \
+            --template-file cf/glue.yml \
+            --stack-name "${APP_NAME}-glue-${ENVIRONMENT}" \
+            --parameter-overrides \
+                "AppName=${APP_NAME}" \
+                "Environment=${ENVIRONMENT}" \
+                "S3StackName=${APP_NAME}-s3-${ENVIRONMENT}" \
+            --tags ${CF_TAGS} \
+            --region "${AWS_REGION}" \
+            --no-fail-on-empty-changeset
+
+      # ---- ECR login ---------------------------------------------------
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push image
+      # ---- Resolve ECR URI from account ID + region -------------------
+      - name: Resolve ECR URI
+        id: ecr
+        run: |
+          URI="${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${APP_NAME}"
+          echo "uri=${URI}" >> "$GITHUB_OUTPUT"
+
+      # ---- Build & push ------------------------------------------------
+      - name: Build and push Docker image
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_URI: ${{ steps.ecr.outputs.uri }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -f api/Dockerfile \
-            -t $ECR_REGISTRY/webapp-api:$IMAGE_TAG \
-            -t $ECR_REGISTRY/webapp-api:latest \
-            api/
-          docker push $ECR_REGISTRY/webapp-api:$IMAGE_TAG
-          docker push $ECR_REGISTRY/webapp-api:latest
+          docker build \
+            --platform linux/amd64 \
+            -t "${ECR_URI}:${IMAGE_TAG}" \
+            -t "${ECR_URI}:latest" \
+            app/
+          docker push "${ECR_URI}:${IMAGE_TAG}"
+          docker push "${ECR_URI}:latest"
 
-      - name: Deploy CloudFormation stack
+      # ---- Deploy ECS stack -------------------------------------------
+      - name: Deploy ECS CloudFormation stack
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          DB_STACK_NAME: ${{ vars.DB_STACK_NAME }}
+          COGNITO_STACK_NAME: ${{ vars.COGNITO_STACK_NAME }}
+          SECRET_KEY_ARN: ${{ vars.SECRET_KEY_ARN }}
         run: |
           aws cloudformation deploy \
-            --template-file infra/cloudformation/app-runner.yml \
-            --stack-name webapp-api-staging \
+            --template-file cf/ecs.yml \
+            --stack-name "${APP_NAME}-ecs-${ENVIRONMENT}" \
             --parameter-overrides \
-              "file://infra/cloudformation/parameters/staging.json" \
-              "ImageTag=${{ github.sha }}" \
-            --capabilities CAPABILITY_IAM \
-            --region ${{ vars.AWS_REGION }}
+                "AppName=${APP_NAME}" \
+                "Environment=${ENVIRONMENT}" \
+                "EcrStackName=${APP_NAME}-ecr" \
+                "ImageTag=${IMAGE_TAG}" \
+                "DatabaseStackName=${DB_STACK_NAME}" \
+                "S3StackName=${APP_NAME}-s3-${ENVIRONMENT}" \
+                "CognitoStackName=${COGNITO_STACK_NAME}" \
+                "SecretKeyArn=${SECRET_KEY_ARN}" \
+            --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
+            --region "${AWS_REGION}" \
+            --no-fail-on-empty-changeset
+
+      # ---- Deploy DNS + TLS stack -------------------------------------
+      - name: Deploy DNS stack
+        run: |
+          CF_TAGS=$(jq -r '.[] | "\(.Key)=\(.Value)"' cf/tags.json | tr '\n' ' ')
+          aws cloudformation deploy \
+            --template-file cf/dns.yml \
+            --stack-name "${APP_NAME}-dns-${ENVIRONMENT}" \
+            --parameter-overrides \
+                "AppName=${APP_NAME}" \
+                "Environment=${ENVIRONMENT}" \
+                "EcsStackName=${APP_NAME}-ecs-${ENVIRONMENT}" \
+            --tags ${CF_TAGS} \
+            --region "${AWS_REGION}" \
+            --no-fail-on-empty-changeset
+
+      # ---- Smoke test -------------------------------------------------
+      - name: Smoke test
+        run: |
+          APP_URL=$(aws cloudformation describe-stacks \
+            --stack-name "${APP_NAME}-dns-${ENVIRONMENT}" \
+            --region "${AWS_REGION}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`AppUrl`].OutputValue' \
+            --output text 2>/dev/null || true)
+
+          if [[ -n "${APP_URL}" ]]; then
+            ./bin/smoke-test.sh --url "${APP_URL}"
+          else
+            ./bin/smoke-test.sh \
+              --env "${ENVIRONMENT}" \
+              --region "${AWS_REGION}" \
+              --app-name "${APP_NAME}"
+          fi
+
+      # ---- Print the app URL ------------------------------------------
+      - name: Print app URL
+        run: |
+          APP_URL=$(aws cloudformation describe-stacks \
+            --stack-name "${APP_NAME}-dns-${ENVIRONMENT}" \
+            --region "${AWS_REGION}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`AppUrl`].OutputValue' \
+            --output text 2>/dev/null || true)
+
+          if [[ -z "${APP_URL}" ]]; then
+            ALB=$(aws cloudformation describe-stacks \
+              --stack-name "${APP_NAME}-ecs-${ENVIRONMENT}" \
+              --region "${AWS_REGION}" \
+              --query 'Stacks[0].Outputs[?OutputKey==`AlbDnsName`].OutputValue' \
+              --output text)
+            APP_URL="http://${ALB}"
+          fi
+
+          echo "### ✅ Deployed to ${ENVIRONMENT}" >> "$GITHUB_STEP_SUMMARY"
+          echo "App URL: ${APP_URL}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Image:   ${{ steps.ecr.outputs.uri }}:${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
