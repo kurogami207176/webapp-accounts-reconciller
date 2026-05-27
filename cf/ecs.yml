@@ -304,12 +304,12 @@ Resources:
         Subnets:
           - Fn::ImportValue: !If
               - HasNetworkStackName
-              - !Sub "${NetworkStackName}-PrivateSubnet1Id"
-              - !Sub "webapp-${Environment}-PrivateSubnet1Id"
+              - !Sub "${NetworkStackName}-PublicSubnet1Id"
+              - !Sub "webapp-${Environment}-PublicSubnet1Id"
           - Fn::ImportValue: !If
               - HasNetworkStackName
-              - !Sub "${NetworkStackName}-PrivateSubnet2Id"
-              - !Sub "webapp-${Environment}-PrivateSubnet2Id"
+              - !Sub "${NetworkStackName}-PublicSubnet2Id"
+              - !Sub "webapp-${Environment}-PublicSubnet2Id"
         SecurityGroups:
           - Fn::ImportValue: !If
               - HasNetworkStackName
