@@ -56,6 +56,14 @@ COGNITO_WEB_CLIENT_ID = os.environ.get("COGNITO_WEB_CLIENT_ID", "")
 COGNITO_MOBILE_CLIENT_ID = os.environ.get("COGNITO_MOBILE_CLIENT_ID", "")
 COGNITO_HOSTED_UI_URL = os.environ.get("COGNITO_HOSTED_UI_URL", "")  # base URL only
 
+# Local dev auth bypass — set DEV_BYPASS_AUTH=admin or DEV_BYPASS_AUTH=branch-<name>
+# NEVER enable in production (checked at import time — won't activate if ENVIRONMENT is set)
+_DEV_BYPASS_AUTH = (
+    os.environ.get("DEV_BYPASS_AUTH", "")
+    if os.environ.get("ENVIRONMENT", "development") == "development"
+    else ""
+)
+
 # All valid client IDs — a token is accepted if its `aud` matches any of these
 _VALID_AUDIENCES = {id_ for id_ in [COGNITO_WEB_CLIENT_ID, COGNITO_MOBILE_CLIENT_ID] if id_}
 
@@ -110,7 +118,7 @@ def _verify_token(token: str) -> dict:
 
 def require_auth(f):
     """
-    Decorator for API routes that require a valid Cognito access token.
+    Decorator for routes that require a valid Cognito access token.
 
     Reads the token from:
       1. Authorization: Bearer <token>  header  (mobile + web API calls)
@@ -120,19 +128,44 @@ def require_auth(f):
       g.user_id  — Cognito sub (stable UUID)
       g.email    — user's email (may be absent on access tokens; use id_token for email)
       g.claims   — full decoded payload
+
+    On failure:
+      - Browser requests (Accept: text/html) → redirect to /auth/login
+      - API requests (Accept: application/json or Authorization header present) → 401 JSON
     """
     @wraps(f)
     def decorated(*args, **kwargs):
+        # ── Local dev bypass (never active in production) ──────────────────
+        if _DEV_BYPASS_AUTH:
+            group = _DEV_BYPASS_AUTH  # e.g. "admins" or "branch-manila"
+            g.user_id = "dev-bypass-user"
+            g.email   = "dev@localhost"
+            g.claims  = {
+                "sub": "dev-bypass-user",
+                "email": "dev@localhost",
+                "cognito:groups": [group],
+                "client_id": "dev",
+            }
+            return f(*args, **kwargs)
+
         token = _extract_token()
         if not token:
+            if _wants_html():
+                return redirect("/auth/login")
             return jsonify(error="Authentication required"), 401
 
         try:
             claims = _verify_token(token)
         except ExpiredSignatureError:
+            if _wants_html():
+                session.clear()
+                return redirect("/auth/login")
             return jsonify(error="Token expired"), 401
         except InvalidTokenError as exc:
             logger.debug("Invalid token: %s", exc)
+            if _wants_html():
+                session.clear()
+                return redirect("/auth/login")
             return jsonify(error="Invalid token"), 401
 
         g.user_id = claims["sub"]
@@ -141,6 +174,21 @@ def require_auth(f):
         return f(*args, **kwargs)
 
     return decorated
+
+
+def _wants_html() -> bool:
+    """Return True if the client prefers HTML (browser navigation).
+
+    curl and API clients typically send no Accept header or Accept: */*.
+    Browsers send Accept: text/html,application/xhtml+xml,...
+    We treat "no accept header" as an API request (JSON).
+    """
+    accept = request.headers.get("Accept", "")
+    # If no Accept header or explicitly requesting JSON → treat as API request
+    if not accept or accept == "*/*":
+        return False
+    best = request.accept_mimetypes.best_match(["text/html", "application/json"])
+    return best == "text/html"
 
 
 def _extract_token() -> str | None:

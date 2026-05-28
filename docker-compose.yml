@@ -1,5 +1,3 @@
-version: "3.9"
-
 # Local development stack for webapp-accounts-reconciller.
 #
 # Services:
@@ -57,6 +55,7 @@ services:
     build:
       context: ./app
       dockerfile: Dockerfile
+      target: base
     command: ["python", "-m", "alembic", "upgrade", "head"]
     working_dir: /app
     environment:
@@ -98,6 +97,9 @@ services:
       COGNITO_MOBILE_CLIENT_ID: "${COGNITO_MOBILE_CLIENT_ID:-}"
       COGNITO_HOSTED_UI_URL: "${COGNITO_HOSTED_UI_URL:-}"
       SECRET_KEY: "${SECRET_KEY:-dev-secret-change-me}"
+      # Local dev auth bypass — set to "admins" for admin view or "branch-manila" etc.
+      # Leave empty (default) to require real Cognito auth.
+      DEV_BYPASS_AUTH: "${DEV_BYPASS_AUTH:-}"
     depends_on:
       db:
         condition: service_healthy

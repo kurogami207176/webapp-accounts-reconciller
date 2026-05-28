@@ -71,7 +71,7 @@ def health_db():
     """
     pool = get_pool()
     if pool is None:
-        return jsonify(status="unconfigured", detail="DB_SECRET_ARN not set"), 503
+        return jsonify(status="unconfigured", detail="No database configured (set DATABASE_URL or DB_SECRET_ARN)"), 503
 
     try:
         with pool.connection() as conn:
