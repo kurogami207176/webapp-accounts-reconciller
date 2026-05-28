@@ -358,57 +358,84 @@ Additional audit angles to consider implementing:
 ## Local Development
 
 ### Prerequisites
-- Docker + Docker Compose
-- Python 3.12
-- AWS CLI (for deployment only)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (includes Compose)
+- Python 3.12+ (for running tests or tasks outside Docker)
+- AWS CLI (for deployment only — not needed for local dev)
 
 ### Start the stack
 
 ```bash
-# 1. Copy env template
+# 1. Copy the env template (only needed once)
 cp .env.example .env
 
-# 2. Start Postgres + LocalStack S3
+# 2. Start Postgres + LocalStack (S3 emulation)
 docker compose up -d db localstack
 
 # 3. Run database migrations
 docker compose run --rm migrate
 
-# 4. Start the Flask dev server (hot reload)
+# 4. Start the Flask dev server with hot reload
 docker compose up app
 ```
 
-App runs at **http://localhost:3000**
+App is available at **http://localhost:3000**
 
-LocalStack S3 bucket `local-reconciler` is created automatically on startup.
+- Health check: `curl http://localhost:3000/health`
+- DB check: `curl http://localhost:3000/health/db`
 
-### Without Docker
+The `local-reconciler` S3 bucket is created automatically in LocalStack on first startup.
+
+### Browsing the UI without Cognito
+
+Protected pages redirect to `/auth/login` by default. For local testing without a real Cognito setup, set `DEV_BYPASS_AUTH` in your `.env`:
 
 ```bash
-cd app
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt
-
-# Set env vars (or source .env)
-export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/appdb
-export S3_BUCKET_NAME=local-reconciler
-export AWS_ENDPOINT_URL=http://localhost:4566
-export AWS_ACCESS_KEY_ID=test
-export AWS_SECRET_ACCESS_KEY=test
-
-# Run migrations
-alembic upgrade head
-
-# Run app
-flask --app app:app run --port 3000 --debug
+# .env
+DEV_BYPASS_AUTH=admins          # browse as admin (dashboard, reports)
+# DEV_BYPASS_AUTH=branch-manila # browse as a branch user (upload forms, history)
 ```
 
-### Running tasks locally
+Then restart the app:
+
+```bash
+docker compose up app
+```
+
+> `DEV_BYPASS_AUTH` is only honoured when `ENVIRONMENT=development`. It is silently ignored in staging and production.
+
+### Running tests
 
 ```bash
 cd app
-python -m tasks.parser --file-id <uuid>
-python -m tasks.matcher --file-id <uuid>
+pip install -r requirements-dev.txt   # once
+
+DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5432/appdb" \
+pytest tests/ -v
+```
+
+### Running tasks locally (parser / matcher)
+
+```bash
+cd app
+DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/appdb \
+S3_BUCKET_NAME=local-reconciler \
+AWS_ENDPOINT_URL=http://localhost:4566 \
+AWS_ACCESS_KEY_ID=test \
+AWS_SECRET_ACCESS_KEY=test \
+  python3 -m tasks.parser --file-id <uuid>
+```
+
+Or use the wrapper script:
+
+```bash
+./bin/run-task.sh --task parser --file-id <uuid> --env local
+```
+
+### Stopping the stack
+
+```bash
+docker compose down          # stop containers, keep volumes
+docker compose down -v       # stop containers and delete all data
 ```
 
 ---
