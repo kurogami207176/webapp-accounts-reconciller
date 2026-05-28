@@ -403,6 +403,21 @@ docker compose up app
 
 > `DEV_BYPASS_AUTH` is only honoured when `ENVIRONMENT=development`. It is silently ignored in staging and production.
 
+### Without Docker (app only)
+
+If you prefer to run the Flask process directly on your machine (Postgres + LocalStack still run in Docker):
+
+```bash
+# Start the backing services first
+docker compose up -d db localstack
+docker compose run --rm migrate      # first time only
+
+# Run the app via the helper script (reads .env automatically)
+./bin/run-local.sh
+```
+
+The script creates `app/.venv`, installs `requirements-dev.txt`, sources `.env`, and starts Flask with hot reload. Pass `--port` to use a different port.
+
 ### Running tests
 
 ```bash
