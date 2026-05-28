@@ -82,7 +82,9 @@ run_test() {
 
   local status=""
   for i in $(seq 1 "${RETRIES}"); do
-    status=$(curl -s -o "${tmp}" -w "%{http_code}" --connect-timeout 10 --max-time 30 "${url}" 2>/dev/null || echo "000")
+    status=$(curl -s -o "${tmp}" -w "%{http_code}" --connect-timeout 10 --max-time 30 \
+      -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" \
+      "${url}" 2>/dev/null || echo "000")
     if [[ "${status}" == "${expected_status}" ]]; then
       break
     fi
@@ -129,10 +131,10 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo " Smoke test — ${BASE_URL}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-run_test "Health check"    "/health"      "200" "status"  "ok"
-run_test "Root"            "/"            "200" "message" "webapp-accounts-reconciller API"
-run_test "Hello endpoint"  "/hello"       "200" "message" "Hello, world!"
-run_test "404 handling"    "/nonexistent" "404" "error"   "Not found"
+run_test "Health check"          "/health"      "200" "status"  "ok"
+run_test "Root → login redirect" "/"            "302" ""        ""
+run_test "Hello endpoint"        "/hello"       "200" "message" "Hello, world!"
+run_test "404 handling"          "/nonexistent" "404" "error"   "Not found"
 
 # ---- results ----------------------------------------------------------------
 echo ""
