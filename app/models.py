@@ -153,6 +153,7 @@ class Summary:
 # ── Allowed values ──────────────────────────────────────────────────────────
 
 ONLINE_SOURCES = ("gcash", "paymaya")
+ONLINE_PAYMENT_TYPES = ONLINE_SOURCES  # alias used by blueprints
 BANK_DEPOSIT_TYPES = ("aub", "bdo", "bpi")
 ALL_SOURCES = ("gcash", "paymaya", "aub", "bdo", "bpi")
 
