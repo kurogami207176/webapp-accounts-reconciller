@@ -82,9 +82,10 @@ def test_health_db_error(client):
 # ---------------------------------------------------------------------------
 
 def test_index(client):
-    res = client.get("/")
-    assert res.status_code == 200
-    assert res.get_json()["message"] == "webapp-accounts-reconciller API"
+    # Unauthenticated browser request → redirect to /auth/login
+    res = client.get("/", headers={"Accept": "text/html"})
+    assert res.status_code == 302
+    assert "/auth/login" in res.headers["Location"]
 
 
 def test_hello(client):
