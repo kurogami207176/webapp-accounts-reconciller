@@ -2,12 +2,16 @@
 
 Revision ID: 001
 Revises:
-Create Date: 2026-05-25
+Create Date: 2026-05-28
 
-Creates the three core tables for the accounts reconciliation app:
-  - submissions            — branch user receipt uploads
-  - bank_statement_files   — admin bank statement uploads
-  - bank_transactions      — parsed transactions from bank statements
+Creates all tables matching the production schema (Neon/Replit):
+  - users               — application users with role + group
+  - submissions         — branch user receipt uploads (GCash / bank deposit)
+  - bank_deposits       — bank deposit records
+  - statement_uploads   — admin bank statement file uploads
+  - transactions        — parsed bank statement transactions
+  - transaction_sources — maps transactions back to their source file + line range
+  - summaries           — summary file records per branch per day
 """
 
 from alembic import op
@@ -20,95 +24,154 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # ── submissions ─────────────────────────────────────────────────────────────
-    # Stores receipt uploads from branch users.
-    # upload_type:  'online_transaction' | 'bank_deposit'
-    # payment_type: 'gcash' | 'paymaya' | 'aub' | 'bdo' | 'bpi'
-    # status:       'UNMATCHED' | 'MATCHED'
+    # ── users ────────────────────────────────────────────────────────────────
+    op.execute("""
+        CREATE TABLE users (
+            id          VARCHAR(36)     PRIMARY KEY,
+            email       VARCHAR(255)    NOT NULL UNIQUE,
+            role        VARCHAR(50)     NOT NULL,
+            group_id    VARCHAR(36)     NOT NULL
+        )
+    """)
+
+    # ── submissions ───────────────────────────────────────────────────────────
+    # Branch user receipt uploads (GCash online transactions).
     op.execute("""
         CREATE TABLE submissions (
-            id                  UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
-            group_id            VARCHAR(100)    NOT NULL,
-            upload_type         VARCHAR(30)     NOT NULL
-                                    CHECK (upload_type IN ('online_transaction', 'bank_deposit')),
-            payment_type        VARCHAR(20)     NOT NULL
-                                    CHECK (payment_type IN ('gcash', 'paymaya', 'aub', 'bdo', 'bpi')),
-            transaction_date    DATE            NOT NULL,
-            transaction_time    TIME            NOT NULL,
-            amount              NUMERIC(10, 2)  NOT NULL,
-            staff_name          VARCHAR(255)    NOT NULL,
-            reference_number    VARCHAR(255),
-            for_day             DATE,
-            photo_s3_key        TEXT            NOT NULL,
-            info_s3_key         TEXT            NOT NULL,
-            status              VARCHAR(20)     NOT NULL DEFAULT 'UNMATCHED'
-                                    CHECK (status IN ('UNMATCHED', 'MATCHED')),
-            submitted_by        VARCHAR(255)    NOT NULL,
-            created_at          TIMESTAMPTZ     NOT NULL DEFAULT now()
+            id                              VARCHAR(36)     PRIMARY KEY,
+            branch_email                    VARCHAR(255)    NOT NULL,
+            date                            DATE            NOT NULL,
+            time                            TIME            NOT NULL,
+            amount                          NUMERIC         NOT NULL,
+            staff_name                      VARCHAR(255)    NOT NULL,
+            image_url                       VARCHAR(500)    NOT NULL,
+            status                          VARCHAR(20)     NOT NULL,
+            record_created_timestamp_utc    TIMESTAMPTZ,
+            record_updated_timestamp_utc    TIMESTAMPTZ,
+            invalid_reason                  TEXT,
+            group_id                        VARCHAR(36),
+            source                          VARCHAR(50)     NOT NULL DEFAULT 'gcash'
         )
     """)
-    op.execute("CREATE INDEX idx_submissions_group_id    ON submissions (group_id)")
-    op.execute("CREATE INDEX idx_submissions_status      ON submissions (status)")
-    op.execute("CREATE INDEX idx_submissions_date        ON submissions (transaction_date)")
-    op.execute("CREATE INDEX idx_submissions_type_amount ON submissions (upload_type, payment_type, amount)")
+    op.execute("CREATE INDEX idx_submissions_matching ON submissions (group_id, status, source, date)")
 
-    # ── bank_statement_files ─────────────────────────────────────────────────────
-    # Stores admin-uploaded bank statement files.
-    # statement_type: 'gcash' | 'paymaya' | 'aub' | 'bdo'
-    # status:         'PENDING' | 'PARSED' | 'INSERTED' | 'FAILED'
+    # ── bank_deposits ─────────────────────────────────────────────────────────
+    # Bank deposit slip uploads from branches.
     op.execute("""
-        CREATE TABLE bank_statement_files (
-            id              UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
-            statement_type  VARCHAR(20)     NOT NULL
-                                CHECK (statement_type IN ('gcash', 'paymaya', 'aub', 'bdo')),
-            file_s3_key     TEXT            NOT NULL,
-            info_s3_key     TEXT            NOT NULL,
-            file_password   VARCHAR(255),
-            comment         TEXT,
-            status          VARCHAR(20)     NOT NULL DEFAULT 'PENDING'
-                                CHECK (status IN ('PENDING', 'PARSED', 'INSERTED', 'FAILED')),
-            uploaded_by     VARCHAR(255)    NOT NULL,
-            created_at      TIMESTAMPTZ     NOT NULL DEFAULT now(),
-            parsed_at       TIMESTAMPTZ,
-            inserted_at     TIMESTAMPTZ,
-            parse_error     TEXT
+        CREATE TABLE bank_deposits (
+            id                              VARCHAR(36)     PRIMARY KEY,
+            branch_email                    VARCHAR(255)    NOT NULL,
+            date                            DATE            NOT NULL,
+            time                            TIME            NOT NULL,
+            amount                          NUMERIC         NOT NULL,
+            staff_name                      VARCHAR(255)    NOT NULL,
+            image_url                       VARCHAR(500)    NOT NULL,
+            bank_type                       VARCHAR(20)     NOT NULL,
+            status                          VARCHAR(20)     NOT NULL,
+            group_id                        VARCHAR(36)     NOT NULL,
+            record_created_timestamp_utc    TIMESTAMPTZ,
+            record_updated_timestamp_utc    TIMESTAMPTZ,
+            reference_number                VARCHAR(100),
+            for_day                         DATE
         )
     """)
-    op.execute("CREATE INDEX idx_bsf_status         ON bank_statement_files (status)")
-    op.execute("CREATE INDEX idx_bsf_statement_type ON bank_statement_files (statement_type)")
-    op.execute("CREATE INDEX idx_bsf_created_at     ON bank_statement_files (created_at)")
+    op.execute("CREATE INDEX idx_bank_deposits_branch_email ON bank_deposits (branch_email)")
+    op.execute("CREATE INDEX idx_bank_deposits_date         ON bank_deposits (date)")
+    op.execute("CREATE INDEX idx_bank_deposits_for_day      ON bank_deposits (for_day)")
+    op.execute("CREATE INDEX idx_bank_deposits_group_date   ON bank_deposits (group_id, date)")
+    op.execute("CREATE INDEX idx_bank_deposits_group_forday ON bank_deposits (group_id, for_day)")
+    op.execute("CREATE INDEX idx_bank_deposits_group_id     ON bank_deposits (group_id)")
+    op.execute("CREATE INDEX idx_bank_deposits_status       ON bank_deposits (status)")
 
-    # ── bank_transactions ────────────────────────────────────────────────────────
-    # Stores individual transactions parsed from bank statement files.
-    # source: 'gcash' | 'paymaya' | 'aub' | 'bdo'
+    # ── statement_uploads ─────────────────────────────────────────────────────
+    # Admin-uploaded bank statement files (PDF/CSV/XLS).
     op.execute("""
-        CREATE TABLE bank_transactions (
+        CREATE TABLE statement_uploads (
+            id                  VARCHAR(36)     PRIMARY KEY,
+            group_id            VARCHAR(36)     NOT NULL,
+            uploaded_by_email   VARCHAR(255)    NOT NULL,
+            file_type           VARCHAR(20)     NOT NULL,
+            file_path           VARCHAR(500)    NOT NULL,
+            original_filename   VARCHAR(255)    NOT NULL,
+            password            VARCHAR(255),
+            status              VARCHAR(20)     NOT NULL,
+            error_message       TEXT,
+            transactions_count  INTEGER,
+            matching_result     TEXT,
+            created_at          TIMESTAMPTZ,
+            updated_at          TIMESTAMPTZ,
+            parsed_count        INTEGER,
+            skipped_count       INTEGER,
+            min_date            DATE,
+            max_date            DATE,
+            comment             TEXT,
+            raw_file_path       VARCHAR(500),
+            text_file_path      VARCHAR(500)
+        )
+    """)
+
+    # ── transactions ──────────────────────────────────────────────────────────
+    # Individual transactions parsed from bank statement files.
+    op.execute("""
+        CREATE TABLE transactions (
             id                              VARCHAR(36)     PRIMARY KEY,
             transaction_id                  VARCHAR(255)    NOT NULL,
             transaction_timestamp           TIMESTAMPTZ     NOT NULL,
             transaction_type                VARCHAR(10)     NOT NULL,
-            amount                          NUMERIC(10, 2)  NOT NULL,
+            amount                          NUMERIC         NOT NULL,
             currency                        VARCHAR(10),
             description                     TEXT,
-            balance                         NUMERIC(10, 2)  NOT NULL,
-            matching_submission_id          VARCHAR(36),
+            balance                         NUMERIC         NOT NULL,
+            matching_submission_id          VARCHAR(36)     REFERENCES submissions (id),
             record_created_timestamp_utc    TIMESTAMPTZ,
             group_id                        VARCHAR(36),
             source                          VARCHAR(50)     NOT NULL DEFAULT 'gcash',
-            matching_bank_deposit_id        VARCHAR(36),
-            bank_statement_file_id          UUID            NOT NULL
-                                                REFERENCES bank_statement_files (id),
-            created_at                      TIMESTAMPTZ     NOT NULL DEFAULT now()
+            matching_bank_deposit_id        VARCHAR(36)     REFERENCES bank_deposits (id),
+            UNIQUE (source, transaction_id)
         )
     """)
-    op.execute("CREATE INDEX idx_bt_file_id       ON bank_transactions (bank_statement_file_id)")
-    op.execute("CREATE INDEX idx_bt_timestamp     ON bank_transactions (transaction_timestamp)")
-    op.execute("CREATE INDEX idx_bt_source_amount ON bank_transactions (source, amount)")
-    op.execute("CREATE INDEX idx_bt_matching      ON bank_transactions (matching_submission_id)")
-    op.execute("CREATE INDEX idx_bt_group_id      ON bank_transactions (group_id)")
+    op.execute("CREATE INDEX idx_transactions_group_id                  ON transactions (group_id)")
+    op.execute("CREATE INDEX idx_transactions_group_matching_deposit     ON transactions (group_id, matching_bank_deposit_id)")
+    op.execute("CREATE INDEX idx_transactions_group_matching_submission  ON transactions (group_id, matching_submission_id)")
+    op.execute("CREATE INDEX idx_transactions_group_source_ts            ON transactions (group_id, source, transaction_timestamp)")
+    op.execute("CREATE INDEX idx_transactions_matching                   ON transactions (group_id, transaction_type, matching_submission_id)")
+
+    # ── transaction_sources ───────────────────────────────────────────────────
+    # Maps each transaction back to its source statement file + line range.
+    op.execute("""
+        CREATE TABLE transaction_sources (
+            id                      VARCHAR(36)     PRIMARY KEY,
+            transaction_id          VARCHAR(36)     NOT NULL REFERENCES transactions (id),
+            statement_upload_id     VARCHAR(36)     NOT NULL REFERENCES statement_uploads (id),
+            raw_file_path           VARCHAR(500),
+            text_file_path          VARCHAR(500),
+            start_line              INTEGER,
+            end_line                INTEGER,
+            group_id                VARCHAR(36)     NOT NULL,
+            created_at              TIMESTAMPTZ
+        )
+    """)
+
+    # ── summaries ─────────────────────────────────────────────────────────────
+    # Summary file records (daily reconciliation reports per branch).
+    op.execute("""
+        CREATE TABLE summaries (
+            id                              VARCHAR(36)     PRIMARY KEY,
+            branch_email                    VARCHAR(255)    NOT NULL,
+            summary_date                    DATE            NOT NULL,
+            summary_type                    VARCHAR(20)     NOT NULL,
+            file_url                        VARCHAR(500)    NOT NULL,
+            record_created_timestamp_utc    TIMESTAMPTZ,
+            group_id                        VARCHAR(36)
+        )
+    """)
 
 
 def downgrade() -> None:
-    op.execute("DROP TABLE IF EXISTS bank_transactions")
-    op.execute("DROP TABLE IF EXISTS bank_statement_files")
+    op.execute("DROP TABLE IF EXISTS transaction_sources")
+    op.execute("DROP TABLE IF EXISTS transactions")
+    op.execute("DROP TABLE IF EXISTS statement_uploads")
+    op.execute("DROP TABLE IF EXISTS bank_deposits")
+    op.execute("DROP TABLE IF EXISTS summaries")
     op.execute("DROP TABLE IF EXISTS submissions")
+    op.execute("DROP TABLE IF EXISTS users")
