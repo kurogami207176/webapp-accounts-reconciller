@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  APP_NAME: webapp-accounts-reconciller
+  ENVIRONMENT: production
+
 jobs:
   deploy:
     name: Build & deploy to production
@@ -24,29 +29,279 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # ---- Deploy ECR stack (idempotent — creates repo on first run) ----
+      - name: Deploy ECR stack
+        run: |
+          aws cloudformation deploy \
+            --template-file cf/ecr.yml \
+            --stack-name "${APP_NAME}-ecr" \
+            --parameter-overrides \
+                "AppName=${APP_NAME}" \
+                "Environment=${ENVIRONMENT}" \
+            --region "${AWS_REGION}" \
+            --no-fail-on-empty-changeset
+
+      # ---- Deploy S3 reconciler bucket --------------------------------
+      - name: Deploy S3 stack
+        run: |
+          CF_TAGS=$(jq -r '.[] | "\(.Key)=\(.Value)"' cf/tags.json | tr '\n' ' ')
+          aws cloudformation deploy \
+            --template-file cf/s3.yml \
+            --stack-name "${APP_NAME}-s3-${ENVIRONMENT}" \
+            --parameter-overrides \
+                "AppName=${APP_NAME}" \
+                "Environment=${ENVIRONMENT}" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --tags ${CF_TAGS} \
+            --region "${AWS_REGION}" \
+            --no-fail-on-empty-changeset
+
+      # ---- Deploy Glue crawlers ----------------------------------------
+      - name: Deploy Glue stack
+        run: |
+          CF_TAGS=$(jq -r '.[] | "\(.Key)=\(.Value)"' cf/tags.json | tr '\n' ' ')
+          aws cloudformation deploy \
+            --template-file cf/glue.yml \
+            --stack-name "${APP_NAME}-glue-${ENVIRONMENT}" \
+            --parameter-overrides \
+                "AppName=${APP_NAME}" \
+                "Environment=${ENVIRONMENT}" \
+                "S3StackName=${APP_NAME}-s3-${ENVIRONMENT}" \
+            --tags ${CF_TAGS} \
+            --region "${AWS_REGION}" \
+            --no-fail-on-empty-changeset
+
+      # ---- ECR login ---------------------------------------------------
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.ref_name }}
+      # ---- Resolve ECR URI from account ID + region -------------------
+      - name: Resolve ECR URI
+        id: ecr
         run: |
-          docker build -f api/Dockerfile \
-            -t $ECR_REGISTRY/webapp-api:$IMAGE_TAG \
-            -t $ECR_REGISTRY/webapp-api:stable \
-            api/
-          docker push $ECR_REGISTRY/webapp-api:$IMAGE_TAG
-          docker push $ECR_REGISTRY/webapp-api:stable
+          URI="${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${APP_NAME}"
+          echo "uri=${URI}" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy CloudFormation stack
+      # ---- Build & push ------------------------------------------------
+      - name: Build and push Docker image
+        env:
+          ECR_URI: ${{ steps.ecr.outputs.uri }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
+          docker build \
+            --platform linux/amd64 \
+            -t "${ECR_URI}:${IMAGE_TAG}" \
+            -t "${ECR_URI}:latest" \
+            app/
+          docker push "${ECR_URI}:${IMAGE_TAG}"
+          docker push "${ECR_URI}:latest"
+
+      # ---- Deploy ECS stack -------------------------------------------
+      - name: Deploy ECS CloudFormation stack
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          DB_STACK_NAME: ${{ vars.DB_STACK_NAME }}
+          COGNITO_STACK_NAME: ${{ vars.COGNITO_STACK_NAME }}
+          SECRET_KEY_ARN: ${{ vars.SECRET_KEY_ARN }}
+          NETWORK_STACK_NAME: ${{ vars.NETWORK_STACK_NAME || 'webapp-production' }}
+        run: |
+          # Delete stuck stacks (ROLLBACK_COMPLETE / UPDATE_ROLLBACK_COMPLETE) or
+          # stacks where the subnet type needs to change (not supported in-place).
+          STACK_STATUS=$(aws cloudformation describe-stacks \
+            --stack-name "${APP_NAME}-ecs-${ENVIRONMENT}" \
+            --region "${AWS_REGION}" \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+
+          # Detect whether the existing service uses private subnets (needs recreation)
+          NEEDS_RECREATION="false"
+          if [[ "${STACK_STATUS}" == "CREATE_COMPLETE" || "${STACK_STATUS}" == "UPDATE_COMPLETE" || "${STACK_STATUS}" == "UPDATE_ROLLBACK_COMPLETE" ]]; then
+            SERVICE_SUBNETS=$(aws ecs describe-services \
+              --cluster default \
+              --services "${APP_NAME}-${ENVIRONMENT}" \
+              --region "${AWS_REGION}" \
+              --query 'services[0].networkConfiguration.awsvpcConfiguration.subnets' \
+              --output json 2>/dev/null || echo "[]")
+            # Get public subnet IDs to compare
+            PUBLIC_SUBNET1=$(aws cloudformation list-exports \
+              --region "${AWS_REGION}" \
+              --query "Exports[?Name=='${NETWORK_STACK_NAME}-PublicSubnet1Id'].Value" \
+              --output text 2>/dev/null || echo "")
+            if [[ -n "${PUBLIC_SUBNET1}" ]] && ! echo "${SERVICE_SUBNETS}" | grep -q "${PUBLIC_SUBNET1}"; then
+              echo "Service is on private subnets but needs public — will recreate."
+              NEEDS_RECREATION="true"
+            fi
+          fi
+
+          if [[ "${STACK_STATUS}" == "ROLLBACK_COMPLETE" || "${STACK_STATUS}" == "UPDATE_ROLLBACK_COMPLETE" || "${NEEDS_RECREATION}" == "true" ]]; then
+            echo "Recreating ECS stack (status=${STACK_STATUS}, needs_recreation=${NEEDS_RECREATION})..."
+
+            # The DNS stack imports AlbDnsName from the ECS stack — must delete DNS first
+            DNS_STATUS=$(aws cloudformation describe-stacks \
+              --stack-name "${APP_NAME}-dns-${ENVIRONMENT}" \
+              --region "${AWS_REGION}" \
+              --query 'Stacks[0].StackStatus' \
+              --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+            if [[ "${DNS_STATUS}" != "DOES_NOT_EXIST" ]]; then
+              echo "  Deleting DNS stack first (it imports from ECS)..."
+              aws cloudformation delete-stack \
+                --stack-name "${APP_NAME}-dns-${ENVIRONMENT}" \
+                --region "${AWS_REGION}"
+              aws cloudformation wait stack-delete-complete \
+                --stack-name "${APP_NAME}-dns-${ENVIRONMENT}" \
+                --region "${AWS_REGION}"
+              echo "  DNS stack deleted."
+            fi
+
+            echo "  Deleting ECS stack..."
+            aws cloudformation delete-stack \
+              --stack-name "${APP_NAME}-ecs-${ENVIRONMENT}" \
+              --region "${AWS_REGION}"
+            aws cloudformation wait stack-delete-complete \
+              --stack-name "${APP_NAME}-ecs-${ENVIRONMENT}" \
+              --region "${AWS_REGION}"
+            echo "ECS stack deleted. Proceeding with fresh deploy."
+          fi
+
           aws cloudformation deploy \
-            --template-file infra/cloudformation/app-runner.yml \
-            --stack-name webapp-api-production \
+            --template-file cf/ecs.yml \
+            --stack-name "${APP_NAME}-ecs-${ENVIRONMENT}" \
             --parameter-overrides \
-              "file://infra/cloudformation/parameters/production.json" \
-              "ImageTag=${{ github.ref_name }}" \
-            --capabilities CAPABILITY_IAM \
-            --region ${{ vars.AWS_REGION }}
+                "AppName=${APP_NAME}" \
+                "Environment=${ENVIRONMENT}" \
+                "EcrStackName=${APP_NAME}-ecr" \
+                "ImageTag=${IMAGE_TAG}" \
+                "NetworkStackName=${NETWORK_STACK_NAME}" \
+                "DatabaseStackName=${DB_STACK_NAME}" \
+                "S3StackName=${APP_NAME}-s3-${ENVIRONMENT}" \
+                "CognitoStackName=${COGNITO_STACK_NAME}" \
+                "SecretKeyArn=${SECRET_KEY_ARN}" \
+            --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
+            --region "${AWS_REGION}" \
+            --no-fail-on-empty-changeset
+
+      # ---- Deploy DNS + TLS stack -------------------------------------
+      - name: Deploy DNS stack
+        run: |
+          CF_TAGS=$(jq -r '.[] | "\(.Key)=\(.Value)"' cf/tags.json | tr '\n' ' ')
+
+          # If the DNS stack is stuck in ROLLBACK_COMPLETE, delete it first
+          DNS_STACK_STATUS=$(aws cloudformation describe-stacks \
+            --stack-name "${APP_NAME}-dns-${ENVIRONMENT}" \
+            --region "${AWS_REGION}" \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          if [[ "${DNS_STACK_STATUS}" == "ROLLBACK_COMPLETE" ]]; then
+            echo "DNS stack is in ROLLBACK_COMPLETE — deleting before redeploy..."
+            aws cloudformation delete-stack \
+              --stack-name "${APP_NAME}-dns-${ENVIRONMENT}" \
+              --region "${AWS_REGION}"
+            aws cloudformation wait stack-delete-complete \
+              --stack-name "${APP_NAME}-dns-${ENVIRONMENT}" \
+              --region "${AWS_REGION}"
+            echo "DNS stack deleted."
+          fi
+
+          # If a Route53 record already exists outside CloudFormation (orphaned),
+          # delete it so CFN can take ownership on a fresh create.
+          HOSTED_ZONE_ID=$(aws ssm get-parameter --name /dns/hosted-zone-id \
+            --region "${AWS_REGION}" --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+          DOMAIN=$(aws ssm get-parameter --name /dns/domain-name \
+            --region "${AWS_REGION}" --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+          if [[ -n "${HOSTED_ZONE_ID}" && -n "${DOMAIN}" ]]; then
+            RECORD_NAME="${APP_NAME}.apps.${DOMAIN}."
+            EXISTING=$(aws route53 list-resource-record-sets \
+              --hosted-zone-id "${HOSTED_ZONE_ID}" \
+              --query "ResourceRecordSets[?Name=='${RECORD_NAME}' && Type=='CNAME'].Name" \
+              --output text 2>/dev/null || echo "")
+            if [[ -n "${EXISTING}" && "${DNS_STACK_STATUS}" != "CREATE_COMPLETE" && "${DNS_STACK_STATUS}" != "UPDATE_COMPLETE" ]]; then
+              echo "Orphaned Route53 record found — removing so CloudFormation can take ownership..."
+              RECORD_VALUE=$(aws route53 list-resource-record-sets \
+                --hosted-zone-id "${HOSTED_ZONE_ID}" \
+                --query "ResourceRecordSets[?Name=='${RECORD_NAME}' && Type=='CNAME'].ResourceRecords[0].Value" \
+                --output text)
+              aws route53 change-resource-record-sets \
+                --hosted-zone-id "${HOSTED_ZONE_ID}" \
+                --change-batch "{\"Changes\":[{\"Action\":\"DELETE\",\"ResourceRecordSet\":{\"Name\":\"${RECORD_NAME}\",\"Type\":\"CNAME\",\"TTL\":300,\"ResourceRecords\":[{\"Value\":\"${RECORD_VALUE}\"}]}}]}"
+              echo "Orphaned record deleted."
+            fi
+          fi
+
+          aws cloudformation deploy \
+            --template-file cf/dns.yml \
+            --stack-name "${APP_NAME}-dns-${ENVIRONMENT}" \
+            --parameter-overrides \
+                "AppName=${APP_NAME}" \
+                "Environment=${ENVIRONMENT}" \
+                "EcsStackName=${APP_NAME}-ecs-${ENVIRONMENT}" \
+            --tags ${CF_TAGS} \
+            --region "${AWS_REGION}" \
+            --no-fail-on-empty-changeset
+
+      # ---- Wait for DNS propagation (CNAME TTL is 300s) -----------------
+      - name: Wait for DNS propagation
+        run: |
+          APP_URL=$(aws cloudformation describe-stacks \
+            --stack-name "${APP_NAME}-dns-${ENVIRONMENT}" \
+            --region "${AWS_REGION}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`AppUrl`].OutputValue' \
+            --output text 2>/dev/null || true)
+
+          if [[ -z "${APP_URL}" ]]; then
+            echo "No DNS stack deployed — skipping DNS wait."
+            exit 0
+          fi
+
+          HOST="${APP_URL#https://}"
+          echo "▶ Waiting for CNAME ${HOST} to resolve (up to 5 min)…"
+          for i in $(seq 1 30); do
+            if dig +short "${HOST}" | grep -q '.'; then
+              echo "  ✓ DNS resolved after $((i * 10))s"
+              exit 0
+            fi
+            echo "  attempt ${i}/30 — not yet resolved, retrying in 10s…"
+            sleep 10
+          done
+          echo "  ⚠ DNS did not resolve within 5 minutes — proceeding anyway"
+
+      # ---- Smoke test -------------------------------------------------
+      - name: Smoke test
+        run: |
+          APP_URL=$(aws cloudformation describe-stacks \
+            --stack-name "${APP_NAME}-dns-${ENVIRONMENT}" \
+            --region "${AWS_REGION}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`AppUrl`].OutputValue' \
+            --output text 2>/dev/null || true)
+
+          if [[ -n "${APP_URL}" ]]; then
+            ./bin/smoke-test.sh --url "${APP_URL}" --retries 36
+          else
+            ./bin/smoke-test.sh \
+              --env "${ENVIRONMENT}" \
+              --region "${AWS_REGION}" \
+              --app-name "${APP_NAME}" \
+              --retries 36
+          fi
+
+      # ---- Print the app URL ------------------------------------------
+      - name: Print app URL
+        run: |
+          APP_URL=$(aws cloudformation describe-stacks \
+            --stack-name "${APP_NAME}-dns-${ENVIRONMENT}" \
+            --region "${AWS_REGION}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`AppUrl`].OutputValue' \
+            --output text 2>/dev/null || true)
+
+          if [[ -z "${APP_URL}" ]]; then
+            ALB=$(aws cloudformation describe-stacks \
+              --stack-name "${APP_NAME}-ecs-${ENVIRONMENT}" \
+              --region "${AWS_REGION}" \
+              --query 'Stacks[0].Outputs[?OutputKey==`AlbDnsName`].OutputValue' \
+              --output text)
+            APP_URL="http://${ALB}"
+          fi
+
+          echo "### ✅ Deployed to ${ENVIRONMENT}" >> "$GITHUB_STEP_SUMMARY"
+          echo "App URL: ${APP_URL}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Image:   ${{ steps.ecr.outputs.uri }}:${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
