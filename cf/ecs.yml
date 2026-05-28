@@ -310,11 +310,7 @@ Resources:
               - HasNetworkStackName
               - !Sub "${NetworkStackName}-PublicSubnet2Id"
               - !Sub "webapp-${Environment}-PublicSubnet2Id"
-        SecurityGroups:
-          - Fn::ImportValue: !If
-              - HasNetworkStackName
-              - !Sub "${NetworkStackName}-AppSecurityGroupId"
-              - !Sub "webapp-${Environment}-AppSecurityGroupId"
+        # SecurityGroups omitted — ECS Express manages its own ALB and task SGs automatically
 
       PrimaryContainer:
         Image: !Sub
