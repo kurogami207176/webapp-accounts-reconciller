@@ -87,14 +87,14 @@ def health_db():
 # ---------------------------------------------------------------------------
 
 @app.get("/")
+@require_auth
 def index():
-    """Root — redirect authenticated users to their landing page."""
-    if hasattr(g, "claims"):
-        if is_admin(g.claims):
-            return redirect(url_for("admin.dashboard"))
-        if is_branch_user(g.claims):
-            return redirect(url_for("branch.upload_online"))
-    return jsonify(message="webapp-accounts-reconciller API", version="1.0.0")
+    """Root — redirect to role-appropriate page; unauthenticated requests go to /auth/login."""
+    if is_admin(g.claims):
+        return redirect(url_for("admin.dashboard"))
+    if is_branch_user(g.claims):
+        return redirect(url_for("branch.upload_online"))
+    return redirect(url_for("auth_login"))
 
 
 @app.get("/hello")
