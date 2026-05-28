@@ -168,16 +168,25 @@ jobs:
           docker push "${ECR_URI}:latest"
 
       # ---- Deploy ECS Express stack (auto-provisions ALB, SGs, scaling) ----
-      # Optional repository variables:
-      #   DB_STACK_NAME      — database CF stack name (e.g. "webapp-production")
-      #   COGNITO_STACK_NAME — Cognito CF stack name (e.g. "webapp-accounts-reconciller-cognito-production")
-      #   SECRET_KEY_ARN     — Secrets Manager ARN for the Flask SECRET_KEY
+      # Repository variables needed (Settings → Variables):
+      #   DB_STACK_NAME                    — database CF stack name
+      #   SECRET_KEY_ARN                   — Secrets Manager ARN for the Flask SECRET_KEY
+      #   FIREBASE_PROJECT_ID              — Firebase project ID (e.g. "gcashmatcher")
+      #   FIREBASE_API_KEY                 — Firebase web API key (public)
+      #   FIREBASE_APP_ID                  — Firebase App ID (public)
+      #   FIREBASE_ADMIN_EMAILS            — comma-separated admin email addresses
+      # Repository secrets needed (Settings → Secrets):
+      #   FIREBASE_SERVICE_ACCOUNT_KEY_ARN — Secrets Manager ARN for the service account JSON
       - name: Deploy ECS CloudFormation stack
         env:
           IMAGE_TAG: ${{ github.sha }}
           DB_STACK_NAME: ${{ vars.DB_STACK_NAME }}
-          COGNITO_STACK_NAME: ${{ vars.COGNITO_STACK_NAME }}
           SECRET_KEY_ARN: ${{ vars.SECRET_KEY_ARN }}
+          FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+          FIREBASE_API_KEY: ${{ vars.FIREBASE_API_KEY }}
+          FIREBASE_APP_ID: ${{ vars.FIREBASE_APP_ID }}
+          FIREBASE_ADMIN_EMAILS: ${{ vars.FIREBASE_ADMIN_EMAILS }}
+          FIREBASE_SERVICE_ACCOUNT_KEY_ARN: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_ARN }}
         run: |
           aws cloudformation deploy \
             --template-file cf/ecs.yml \
@@ -189,8 +198,12 @@ jobs:
                 "ImageTag=${IMAGE_TAG}" \
                 "DatabaseStackName=${DB_STACK_NAME}" \
                 "S3StackName=${APP_NAME}-s3-${ENVIRONMENT}" \
-                "CognitoStackName=${COGNITO_STACK_NAME}" \
                 "SecretKeyArn=${SECRET_KEY_ARN}" \
+                "FirebaseProjectId=${FIREBASE_PROJECT_ID}" \
+                "FirebaseApiKey=${FIREBASE_API_KEY}" \
+                "FirebaseAppId=${FIREBASE_APP_ID}" \
+                "AdminEmails=${FIREBASE_ADMIN_EMAILS}" \
+                "FirebaseServiceAccountKeyArn=${FIREBASE_SERVICE_ACCOUNT_KEY_ARN}" \
             --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
             --region "${AWS_REGION}" \
             --no-fail-on-empty-changeset

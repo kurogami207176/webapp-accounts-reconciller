@@ -1,13 +1,13 @@
 """
-roles.py — Cognito Group-based role helpers.
+roles.py — Firebase Custom Claim-based role helpers.
 
-Cognito groups convention:
-  - "admins"          → admin role (full access)
-  - "branch-<name>"   → branch role; group name doubles as group_id
-    e.g. "branch-manila", "branch-cebu"
+Firebase custom claims convention (set by auth.py on first login):
+  role: "admin"   → full admin access
+  role: "branch"  → branch user; group_id holds the branch identifier
+                    e.g. role="branch", group_id="branch-manila"
 
-The groups list is embedded in the JWT access token under the
-"cognito:groups" claim by Cognito when group membership is configured.
+Custom claims are embedded in the Firebase ID token payload and are
+available on g.claims after @require_auth runs.
 
 Usage:
     from roles import is_admin, require_admin, require_branch, get_branch_group_id
@@ -33,34 +33,44 @@ from flask import g, jsonify
 
 logger = logging.getLogger(__name__)
 
-ADMIN_GROUP = "admins"
+ADMIN_ROLE = "admin"
+BRANCH_ROLE = "branch"
 BRANCH_GROUP_PREFIX = "branch-"
 
 
-def get_user_groups(claims: dict) -> list[str]:
-    """Extract Cognito group memberships from JWT claims."""
-    return claims.get("cognito:groups") or []
-
-
 def is_admin(claims: dict) -> bool:
-    """Return True if the user belongs to the admins group."""
-    return ADMIN_GROUP in get_user_groups(claims)
+    """Return True if the user has the admin role."""
+    return claims.get("role") == ADMIN_ROLE
 
 
 def is_branch_user(claims: dict) -> bool:
-    """Return True if the user belongs to at least one branch group."""
-    return any(g.startswith(BRANCH_GROUP_PREFIX) for g in get_user_groups(claims))
+    """Return True if the user has the branch role."""
+    return claims.get("role") == BRANCH_ROLE
 
 
 def get_branch_group_id(claims: dict) -> str | None:
     """
-    Return the first branch group name the user belongs to, or None.
-    The group name IS the group_id (e.g. "branch-manila").
+    Return the branch group_id if the user is a branch user, else None.
+    e.g. "branch-manila"
     """
-    for group in get_user_groups(claims):
-        if group.startswith(BRANCH_GROUP_PREFIX):
-            return group
+    if claims.get("role") == BRANCH_ROLE:
+        return claims.get("group_id") or None
     return None
+
+
+def get_user_groups(claims: dict) -> list[str]:
+    """
+    Return a list of group identifiers for the user.
+    Admins get ["admins"]; branch users get their group_id (if set).
+    Provided for compatibility with any code that iterates groups.
+    """
+    role = claims.get("role", "")
+    if role == ADMIN_ROLE:
+        return ["admins"]
+    if role == BRANCH_ROLE:
+        gid = claims.get("group_id", "")
+        return [gid] if gid else []
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +79,7 @@ def get_branch_group_id(claims: dict) -> str | None:
 
 def require_admin(f):
     """
-    Decorator that requires the authenticated user to be in the 'admins' group.
+    Decorator that requires the authenticated user to have the admin role.
     Must be applied AFTER @require_auth (which sets g.claims).
     """
     @wraps(f)
@@ -82,7 +92,7 @@ def require_admin(f):
 
 def require_branch(f):
     """
-    Decorator that requires the authenticated user to be in a branch group.
+    Decorator that requires the authenticated user to have the branch role.
     Must be applied AFTER @require_auth (which sets g.claims).
     """
     @wraps(f)

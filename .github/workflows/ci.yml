@@ -50,7 +50,8 @@ jobs:
           AWS_DEFAULT_REGION: ap-southeast-2
           AWS_ACCESS_KEY_ID: testing
           AWS_SECRET_ACCESS_KEY: testing
-          COGNITO_REGION: ap-southeast-2
+          # Firebase credentials not needed for unit tests — auth._verify_token is patched
+          FIREBASE_PROJECT_ID: test-project
         run: pytest tests/ -v --cov=. --cov-report=xml
         working-directory: app
 

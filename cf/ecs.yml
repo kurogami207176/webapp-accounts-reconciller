@@ -45,12 +45,35 @@ Parameters:
       Leave empty to run without a database — DB_SECRET_ARN will not be set.
       e.g. "webapp-staging-database"
 
-  CognitoStackName:
+  FirebaseProjectId:
+    Type: String
+    Default: ""
+    Description: Firebase project ID (e.g. "gcashmatcher"). Used by the app for auth.
+
+  FirebaseServiceAccountKeyArn:
     Type: String
     Default: ""
     Description: >
-      Name of the deployed Cognito CloudFormation stack (cf/cognito.yml).
-      Leave empty to run without authentication — auth routes will return 503.
+      ARN of a Secrets Manager secret whose SecretString is the full
+      Firebase service account key JSON. Injected into the container as
+      FIREBASE_SERVICE_ACCOUNT_KEY at launch time.
+
+  FirebaseApiKey:
+    Type: String
+    Default: ""
+    Description: Firebase Web API key (public — used by the login page JS).
+
+  FirebaseAppId:
+    Type: String
+    Default: ""
+    Description: Firebase App ID (public — used by the login page JS).
+
+  AdminEmails:
+    Type: String
+    Default: ""
+    Description: >
+      Comma-separated list of email addresses that receive the admin role
+      on first login (GASHFLOW_ADMIN_EMAILS env var).
 
   EcrStackName:
     Type: String
@@ -109,11 +132,15 @@ Parameters:
 # Conditions
 # ─────────────────────────────────────────────────────────────────────────────
 Conditions:
-  HasDatabase:        !Not [!Equals [!Ref DatabaseStackName, ""]]
-  HasCognito:         !Not [!Equals [!Ref CognitoStackName, ""]]
-  HasSecretKey:       !Not [!Equals [!Ref SecretKeyArn, ""]]
-  HasNetworkStackName: !Not [!Equals [!Ref NetworkStackName, ""]]
-  HasS3:              !Not [!Equals [!Ref S3StackName, ""]]
+  HasDatabase:                    !Not [!Equals [!Ref DatabaseStackName, ""]]
+  HasSecretKey:                   !Not [!Equals [!Ref SecretKeyArn, ""]]
+  HasNetworkStackName:            !Not [!Equals [!Ref NetworkStackName, ""]]
+  HasS3:                          !Not [!Equals [!Ref S3StackName, ""]]
+  HasFirebaseProjectId:           !Not [!Equals [!Ref FirebaseProjectId, ""]]
+  HasFirebaseServiceAccountKey:   !Not [!Equals [!Ref FirebaseServiceAccountKeyArn, ""]]
+  HasFirebaseApiKey:              !Not [!Equals [!Ref FirebaseApiKey, ""]]
+  HasFirebaseAppId:               !Not [!Equals [!Ref FirebaseAppId, ""]]
+  HasAdminEmails:                 !Not [!Equals [!Ref AdminEmails, ""]]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Resources
@@ -155,6 +182,22 @@ Resources:
             Effect: Allow
             Action: secretsmanager:GetSecretValue
             Resource: !Ref SecretKeyArn
+
+  # Allow execution role to inject FIREBASE_SERVICE_ACCOUNT_KEY at container launch
+  ExecutionRoleFirebaseKeyPolicy:
+    Type: AWS::IAM::Policy
+    Condition: HasFirebaseServiceAccountKey
+    Properties:
+      PolicyName: !Sub "${AppName}-${Environment}-exec-fetch-firebase-key"
+      Roles:
+        - !Ref TaskExecutionRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: FetchFirebaseKey
+            Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource: !Ref FirebaseServiceAccountKeyArn
 
   # ── IAM — ECS task role (runtime permissions for the app) ──────────────────
   TaskRole:
@@ -341,39 +384,35 @@ Resources:
           - Name: AWS_DEFAULT_REGION
             Value: !Ref AWS::Region
           - !If
-            - HasCognito
-            - Name: COGNITO_REGION
-              Value: !Ref AWS::Region
+            - HasFirebaseProjectId
+            - Name: FIREBASE_PROJECT_ID
+              Value: !Ref FirebaseProjectId
             - !Ref AWS::NoValue
           - !If
-            - HasCognito
-            - Name: COGNITO_USER_POOL_ID
-              Value:
-                Fn::ImportValue: !Sub "${CognitoStackName}-UserPoolId"
+            - HasFirebaseApiKey
+            - Name: FIREBASE_API_KEY
+              Value: !Ref FirebaseApiKey
             - !Ref AWS::NoValue
           - !If
-            - HasCognito
-            - Name: COGNITO_WEB_CLIENT_ID
-              Value:
-                Fn::ImportValue: !Sub "${CognitoStackName}-WebClientId"
+            - HasFirebaseAppId
+            - Name: FIREBASE_APP_ID
+              Value: !Ref FirebaseAppId
             - !Ref AWS::NoValue
           - !If
-            - HasCognito
-            - Name: COGNITO_MOBILE_CLIENT_ID
-              Value:
-                Fn::ImportValue: !Sub "${CognitoStackName}-MobileClientId"
-            - !Ref AWS::NoValue
-          - !If
-            - HasCognito
-            - Name: COGNITO_HOSTED_UI_URL
-              Value:
-                Fn::ImportValue: !Sub "${CognitoStackName}-HostedUiBaseUrl"
+            - HasAdminEmails
+            - Name: GASHFLOW_ADMIN_EMAILS
+              Value: !Ref AdminEmails
             - !Ref AWS::NoValue
         Secrets:
           - !If
             - HasSecretKey
             - Name: SECRET_KEY
               ValueFrom: !Ref SecretKeyArn
+            - !Ref AWS::NoValue
+          - !If
+            - HasFirebaseServiceAccountKey
+            - Name: FIREBASE_SERVICE_ACCOUNT_KEY
+              ValueFrom: !Ref FirebaseServiceAccountKeyArn
             - !Ref AWS::NoValue
 
       ScalingTarget:

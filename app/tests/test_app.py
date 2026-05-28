@@ -1,8 +1,8 @@
 """
 Tests for app.py routes.
 
-Auth is tested by patching auth._verify_token so no real Cognito/JWKS
-calls are made. The autouse fixture bypasses auth on all non-auth tests
+Auth is tested by patching auth._verify_token so no real Firebase calls
+are made. The autouse fixture bypasses auth on all non-auth tests
 by patching require_auth to be a no-op.
 """
 
@@ -111,14 +111,14 @@ def test_api_me_no_token(client):
 
 
 def test_api_me_invalid_token(client):
-    from jwt import InvalidTokenError
-    with patch("auth._verify_token", side_effect=InvalidTokenError("bad token")):
+    with patch("auth._verify_token", side_effect=Exception("bad token")):
         res = client.get("/api/me", headers={"Authorization": "Bearer bad.token.here"})
     assert res.status_code == 401
 
 
 def test_api_me_valid_token(client):
-    fake_claims = {"sub": "user-uuid-123", "email": "user@example.com", "client_id": "test"}
+    # Firebase decoded tokens use 'uid' not 'sub'
+    fake_claims = {"uid": "user-uuid-123", "email": "user@example.com"}
     with patch("auth._verify_token", return_value=fake_claims):
         res = client.get("/api/me", headers={"Authorization": "Bearer valid.token.here"})
 
@@ -138,35 +138,53 @@ def test_auth_me_no_token(client):
 
 
 def test_auth_me_valid_token(client):
-    fake_claims = {"sub": "user-uuid-456", "email": "web@example.com", "client_id": "test"}
+    fake_claims = {"uid": "user-uuid-456", "email": "web@example.com", "role": "branch"}
     with patch("auth._verify_token", return_value=fake_claims):
         res = client.get("/auth/me", headers={"Authorization": "Bearer valid.token.here"})
 
     assert res.status_code == 200
-    assert res.get_json()["user_id"] == "user-uuid-456"
+    data = res.get_json()
+    assert data["user_id"] == "user-uuid-456"
+    assert data["role"] == "branch"
 
 
 # ---------------------------------------------------------------------------
-# Auth routes — /auth/login redirect
+# Auth routes — /auth/login serves the Firebase login page
 # ---------------------------------------------------------------------------
 
-def test_auth_login_not_configured(client):
-    """Without COGNITO env vars, login returns 503."""
-    res = client.get("/auth/login")
-    assert res.status_code == 503
-
-
-def test_auth_login_redirects(client):
-    """With Cognito configured, /auth/login redirects to the Hosted UI."""
-    with (
-        patch("auth.COGNITO_HOSTED_UI_URL", "https://example.auth.ap-southeast-2.amazoncognito.com"),
-        patch("auth.COGNITO_WEB_CLIENT_ID", "abc123"),
-    ):
+def test_auth_login_renders_page(client):
+    """GET /auth/login should return 200 with the Firebase login HTML."""
+    with patch("auth.FIREBASE_PROJECT_ID", "gcashmatcher"):
         res = client.get("/auth/login")
+    assert res.status_code == 200
+    assert b"firebase" in res.data.lower()
 
-    assert res.status_code == 302
-    assert "amazoncognito.com" in res.headers["Location"]
-    assert "response_type=code" in res.headers["Location"]
+
+# ---------------------------------------------------------------------------
+# Auth routes — /auth/callback verifies Firebase token
+# ---------------------------------------------------------------------------
+
+def test_auth_callback_missing_token(client):
+    res = client.post("/auth/callback", json={})
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "Missing idToken"
+
+
+def test_auth_callback_invalid_token(client):
+    with patch("auth._verify_token", side_effect=Exception("token invalid")):
+        res = client.post("/auth/callback", json={"idToken": "bad.token"})
+    assert res.status_code == 401
+
+
+def test_auth_callback_valid_token(client):
+    fake_claims = {"uid": "uid-abc", "email": "user@example.com", "role": "branch"}
+    with (
+        patch("auth._verify_token", return_value=fake_claims),
+        patch("auth._ensure_custom_claims"),
+    ):
+        res = client.post("/auth/callback", json={"idToken": "valid.token"})
+    assert res.status_code == 200
+    assert res.get_json()["ok"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -175,12 +193,13 @@ def test_auth_login_redirects(client):
 
 def test_auth_logout_clears_session(client):
     with client.session_transaction() as sess:
-        sess["cognito_access_token"] = "some-token"
+        sess["firebase_id_token"] = "some-token"
 
     res = client.get("/auth/logout")
 
-    # Should redirect (either to Cognito or /)
+    # Should redirect to /auth/login
     assert res.status_code == 302
+    assert "/auth/login" in res.headers["Location"]
 
     with client.session_transaction() as sess:
-        assert "cognito_access_token" not in sess
+        assert "firebase_id_token" not in sess

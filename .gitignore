@@ -23,6 +23,7 @@ out/
 .env
 .env.local
 .env.*.local
+.env.replit
 
 # Terraform / misc
 *.tfstate

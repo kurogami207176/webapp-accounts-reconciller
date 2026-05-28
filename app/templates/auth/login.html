@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign In — Accounts Reconciler</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f5f7fa;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.10);
+      padding: 2.5rem 2rem;
+      width: 100%;
+      max-width: 400px;
+    }
+    .brand {
+      text-align: center;
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-bottom: 0.25rem;
+    }
+    .subtitle {
+      text-align: center;
+      font-size: 0.875rem;
+      color: #64748b;
+      margin-bottom: 2rem;
+    }
+    .form-group { margin-bottom: 1rem; }
+    label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: #374151;
+      margin-bottom: 0.35rem;
+    }
+    input[type="email"],
+    input[type="password"] {
+      width: 100%;
+      padding: 0.55rem 0.75rem;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font-size: 0.875rem;
+    }
+    input:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
+    }
+    .btn-primary {
+      width: 100%;
+      padding: 0.65rem;
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 0.5rem;
+    }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-primary:disabled { background: #93c5fd; cursor: not-allowed; }
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin: 1.25rem 0;
+      color: #94a3b8;
+      font-size: 0.8rem;
+    }
+    .divider::before, .divider::after {
+      content: "";
+      flex: 1;
+      border-top: 1px solid #e5e7eb;
+    }
+    .btn-google {
+      width: 100%;
+      padding: 0.6rem;
+      background: #fff;
+      color: #374151;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+    .btn-google:hover { background: #f9fafb; }
+    .error-msg {
+      background: #fee2e2;
+      color: #991b1b;
+      border-radius: 6px;
+      padding: 0.65rem 0.9rem;
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+      display: none;
+    }
+    .loading { display: none; text-align: center; color: #64748b; font-size: 0.875rem; margin-top: 0.75rem; }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <div class="brand">🏦 Reconciler</div>
+    <div class="subtitle">Accounts Reconciliation Portal</div>
+
+    <div class="error-msg" id="errorMsg"></div>
+
+    <form id="loginForm" autocomplete="on">
+      <div class="form-group">
+        <label for="email">Email address</label>
+        <input type="email" id="email" name="email" required autocomplete="email" placeholder="you@example.com">
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="••••••••">
+      </div>
+      <button type="submit" class="btn-primary" id="signInBtn">Sign in</button>
+    </form>
+
+    <div class="divider">or</div>
+
+    <button class="btn-google" id="googleBtn">
+      <svg width="18" height="18" viewBox="0 0 48 48">
+        <path fill="#EA4335" d="M24 9.5c3.5 0 6.3 1.2 8.4 3.2l6.3-6.3C34.7 3.2 29.7 1 24 1 14.6 1 6.6 6.6 3 14.5l7.4 5.7C12.1 13.3 17.6 9.5 24 9.5z"/>
+        <path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.6 3-2.3 5.5-4.8 7.2l7.4 5.7c4.3-4 6.8-9.8 6.8-16.7.1-.7.4-1 .4-.2z"/>
+        <path fill="#FBBC05" d="M10.4 28.8A14.6 14.6 0 0 1 9.5 24c0-1.7.3-3.3.8-4.8L3 13.5A23.5 23.5 0 0 0 .5 24c0 3.8.9 7.3 2.5 10.5l7.4-5.7z"/>
+        <path fill="#34A853" d="M24 47c5.7 0 10.5-1.9 14-5.1l-7.4-5.7c-1.9 1.3-4.3 2-6.6 2-6.4 0-11.9-3.8-13.6-9.2l-7.4 5.7C6.6 41.4 14.6 47 24 47z"/>
+      </svg>
+      Sign in with Google
+    </button>
+
+    <div class="loading" id="loadingMsg">Signing in…</div>
+  </div>
+
+  <!-- Firebase JS SDK (compat mode — works without a bundler) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script>
+    const firebaseConfig = {
+      apiKey:    "{{ firebase_api_key }}",
+      appId:     "{{ firebase_app_id }}",
+      projectId: "{{ firebase_project_id }}",
+      authDomain: "{{ firebase_project_id }}.firebaseapp.com",
+    };
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+
+    const loginForm  = document.getElementById("loginForm");
+    const googleBtn  = document.getElementById("googleBtn");
+    const signInBtn  = document.getElementById("signInBtn");
+    const errorMsg   = document.getElementById("errorMsg");
+    const loadingMsg = document.getElementById("loadingMsg");
+
+    function showError(msg) {
+      errorMsg.textContent = msg;
+      errorMsg.style.display = "block";
+      loadingMsg.style.display = "none";
+      signInBtn.disabled = false;
+      googleBtn.disabled = false;
+    }
+
+    function showLoading() {
+      errorMsg.style.display = "none";
+      loadingMsg.style.display = "block";
+      signInBtn.disabled = true;
+      googleBtn.disabled = true;
+    }
+
+    async function handleToken(user) {
+      showLoading();
+      try {
+        // Force-refresh to pick up any new custom claims
+        const idToken = await user.getIdToken(true);
+        const resp = await fetch("/auth/callback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ idToken }),
+        });
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}));
+          showError(body.error || "Sign-in failed. Please try again.");
+          return;
+        }
+        window.location.href = "/";
+      } catch (err) {
+        showError("Network error. Please try again.");
+      }
+    }
+
+    loginForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      showLoading();
+      const email    = document.getElementById("email").value.trim();
+      const password = document.getElementById("password").value;
+      try {
+        const { user } = await auth.signInWithEmailAndPassword(email, password);
+        await handleToken(user);
+      } catch (err) {
+        const messages = {
+          "auth/user-not-found":    "No account found for this email.",
+          "auth/wrong-password":    "Incorrect password.",
+          "auth/invalid-email":     "Please enter a valid email address.",
+          "auth/too-many-requests": "Too many attempts. Try again later.",
+          "auth/invalid-credential": "Email or password is incorrect.",
+        };
+        showError(messages[err.code] || err.message || "Sign-in failed.");
+      }
+    });
+
+    googleBtn.addEventListener("click", async () => {
+      showLoading();
+      try {
+        const provider = new firebase.auth.GoogleAuthProvider();
+        const { user } = await auth.signInWithPopup(provider);
+        await handleToken(user);
+      } catch (err) {
+        if (err.code === "auth/popup-closed-by-user") {
+          showError("Sign-in cancelled.");
+        } else {
+          showError(err.message || "Google sign-in failed.");
+        }
+      }
+    });
+  </script>
+</body>
+</html>
